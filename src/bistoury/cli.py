@@ -11,6 +11,7 @@ import click
 from . import __version__
 from .config import Config
 from .logger import get_logger
+from .database.connection import initialize_database, get_database_manager, shutdown_database
 
 
 @click.group()
@@ -53,6 +54,14 @@ def main(ctx: click.Context, config: Optional[Path], verbose: bool) -> None:
         ctx.obj["config"].logging.level = "DEBUG"
     
     ctx.obj["logger"] = get_logger("bistoury.cli", ctx.obj["config"].logging.level)
+    
+    # Initialize database
+    try:
+        initialize_database(ctx.obj["config"])
+        click.echo("Database initialized successfully", err=True)
+    except Exception as e:
+        click.echo(f"Database initialization failed: {e}", err=True)
+        sys.exit(1)
 
 
 @main.command()
@@ -65,27 +74,59 @@ def status(ctx: click.Context) -> None:
     click.echo("🤖 Bistoury Trading System Status")
     click.echo("=" * 40)
     
-    # Configuration status
-    click.echo(f"📁 Database Path: {config.database.path}")
-    click.echo(f"📝 Log Level: {config.logging.level}")
-    click.echo(f"💰 Risk Limit: ${config.trading.risk_limit_usd}")
-    click.echo(f"📊 Default Pairs: {', '.join(config.data.default_pairs)}")
-    click.echo(f"⏰ Timeframes: {', '.join(config.data.default_timeframes)}")
+    # Environment info
+    click.echo(f"Environment: {config.environment}")
+    click.echo(f"Debug Mode: {config.debug}")
+    click.echo(f"Trading Mode: {config.trading.mode}")
     
-    # LLM providers
-    providers = config.get_available_llm_providers()
-    click.echo(f"🧠 LLM Providers: {', '.join(providers)}")
+    # Database info
+    try:
+        db_manager = get_database_manager()
+        db_info = db_manager.get_database_info()
+        
+        click.echo("\n📊 Database Status:")
+        click.echo(f"  Path: {db_info.get('database_path', 'Unknown')}")
+        click.echo(f"  Tables: {db_info.get('table_count', 'Unknown')}")
+        click.echo(f"  Active Connections: {db_info.get('active_connections', 'Unknown')}")
+        click.echo(f"  Max Connections: {db_info.get('max_connections', 'Unknown')}")
+        
+        if "database_size" in db_info:
+            click.echo(f"  Size: {db_info['database_size']}")
+            
+    except Exception as e:
+        click.echo(f"\n❌ Database Error: {e}")
     
-    # HyperLiquid connection
-    if config.hyperliquid:
-        mode = "🧪 Testnet" if config.hyperliquid.testnet else "🚀 Mainnet"
-        click.echo(f"🔗 HyperLiquid: {mode}")
-    else:
-        click.echo("🔗 HyperLiquid: ❌ Not configured")
+    # Configuration validation
+    click.echo("\n🔧 Configuration:")
+    click.echo(f"  Database Path: {config.database.path}")
+    click.echo(f"  Log Level: {config.logging.level}")
     
-    # Validation
-    if not config.validate_llm_keys():
-        click.echo("⚠️  Warning: No LLM API keys configured", err=True)
+    # API Status
+    click.echo("\n🔑 API Keys:")
+    api_keys = {
+        "HyperLiquid Private Key": bool(config.api.hyperliquid_private_key),
+        "HyperLiquid Wallet": bool(config.api.hyperliquid_wallet_address),
+        "OpenAI": bool(config.api.openai_api_key),
+        "Anthropic": bool(config.api.anthropic_api_key),
+    }
+    
+    for name, configured in api_keys.items():
+        status_icon = "✅" if configured else "❌"
+        click.echo(f"  {status_icon} {name}: {'Configured' if configured else 'Not configured'}")
+    
+    # Trading validation
+    click.echo(f"\n💰 Trading Configuration:")
+    click.echo(f"  Mode: {config.trading.mode}")
+    click.echo(f"  Max Position Size: ${config.trading.max_position_size:,.2f}")
+    click.echo(f"  Stop Loss: {config.trading.stop_loss_pct}%")
+    click.echo(f"  Take Profit: {config.trading.take_profit_pct}%")
+    
+    if config.trading.mode == "live":
+        try:
+            config.validate_for_trading()
+            click.echo("  ✅ Ready for live trading")
+        except ValueError as e:
+            click.echo(f"  ❌ Live trading validation failed: {e}")
     
     logger.info("Status command executed")
 
@@ -242,6 +283,43 @@ def init(ctx: click.Context) -> None:
     
     click.echo("✅ Initialization complete!")
     logger.info("Bistoury initialization completed")
+
+
+@main.command()
+@click.pass_context
+def db_status(ctx: click.Context) -> None:
+    """Show detailed database status and statistics."""
+    try:
+        db_manager = get_database_manager()
+        db_info = db_manager.get_database_info()
+        
+        click.echo("📊 Database Status Details")
+        click.echo("=" * 30)
+        
+        for key, value in db_info.items():
+            click.echo(f"{key.replace('_', ' ').title()}: {value}")
+            
+        # Test query
+        click.echo("\n🧪 Testing database connection...")
+        result = db_manager.execute("SELECT 'Database connection OK' as status")
+        click.echo(f"✅ {result[0][0]}")
+        
+    except Exception as e:
+        click.echo(f"❌ Database error: {e}")
+        sys.exit(1)
+
+
+def shutdown():
+    """Cleanup function called on exit."""
+    try:
+        shutdown_database()
+    except Exception:
+        pass  # Ignore errors during shutdown
+
+
+# Register cleanup
+import atexit
+atexit.register(shutdown)
 
 
 if __name__ == "__main__":
