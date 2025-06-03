@@ -1,0 +1,491 @@
+# Bistoury: LLM-Driven Cryptocurrency Trading System Product Requirements Document
+
+## 1. Introduction
+
+This Product Requirements Document (PRD) defines the specifications for Bistoury, an autonomous cryptocurrency trading system that leverages Large Language Models (LLMs) to execute intelligent trading strategies on the HyperLiquid exchange. The system combines advanced pattern recognition, multi-dimensional market analysis, and natural language processing to achieve consistent profitability through automated trading.
+
+This document serves as the authoritative reference for all stakeholders involved in the development, testing, and deployment of Bistoury. It outlines functional requirements, technical specifications, user interactions, and implementation priorities to ensure successful delivery of a production-ready trading system.
+
+## 2. Product overview
+
+Bistoury is a locally-deployed, Python-based trading bot that operates continuously on the HyperLiquid decentralized exchange. The system employs a multi-agent architecture where specialized components collect market data, analyze trading signals, manage positions, and execute trades based on LLM-driven decision making.
+
+The core innovation lies in transforming raw market data into narrative-rich contexts that LLMs can interpret naturally. Rather than relying on rigid algorithmic rules, Bistoury constructs market stories from multiple data streams - candlestick patterns, funding rates, order flow dynamics, and volume profiles - enabling nuanced trading decisions that adapt to changing market conditions.
+
+The system progresses through four operational modes: Data Collection → Paper Trading Historical → Strategy Optimization → Paper Trading Live → Live Trading. This staged approach ensures thorough testing and optimization before risking real capital, while maintaining the flexibility to return to earlier stages for refinement.
+
+## 3. Goals and objectives
+
+### 3.1 Primary objectives
+
+- **Achieve consistent profitability**: Target 1% portfolio growth every 24 hours through intelligent position management
+- **Operate autonomously**: Run continuously without manual intervention or supervision
+- **Minimize operational overhead**: Optimize for low power consumption and minimal computational resources
+- **Maintain single-developer sustainability**: Ensure the entire system can be maintained and enhanced by one person
+
+### 3.2 Technical objectives
+
+- **Implement robust data collection**: Capture and store all relevant market data in original format for analysis and backtesting
+- **Enable flexible strategy development**: Support easy addition and removal of trading strategies through modular architecture
+- **Ensure system reliability**: Handle connection failures, API errors, and edge cases gracefully
+- **Optimize execution speed**: Minimize latency between signal generation and trade execution
+
+### 3.3 Strategic objectives
+
+- **Leverage LLM capabilities**: Utilize language models' pattern recognition and contextual reasoning for superior trading decisions
+- **Maintain explainability**: Ensure all trading decisions can be explained in natural language
+- **Support continuous improvement**: Enable strategy optimization through historical performance analysis
+- **Minimize risk exposure**: Implement robust position sizing and risk management controls
+
+## 4. Target audience
+
+### 4.1 Primary users
+
+- **Individual traders/developers**: Technical professionals with Python programming skills who want to deploy personal trading bots
+- **Quantitative researchers**: Individuals researching LLM applications in financial markets
+- **Crypto trading enthusiasts**: Advanced users seeking to automate their trading strategies on HyperLiquid
+
+### 4.2 User characteristics
+
+- **Technical proficiency**: Comfortable with command-line interfaces, Python environments, and API configurations
+- **Trading knowledge**: Understanding of cryptocurrency markets, perpetual futures, and basic trading concepts
+- **Risk awareness**: Comprehension of financial risks associated with automated trading
+- **Infrastructure access**: Ability to maintain a continuously running system (VPS, dedicated machine, or cloud instance)
+
+### 4.3 Use cases
+
+- **Personal trading automation**: Deploy bot with personal capital for passive income generation
+- **Strategy research**: Test and optimize LLM-based trading strategies using historical data
+- **Market analysis**: Use data collection capabilities for market research and pattern analysis
+- **Educational purposes**: Learn about algorithmic trading and LLM applications in finance
+
+## 5. Features and requirements
+
+### 5.1 Core system features
+
+#### 5.1.1 Multi-agent architecture
+- **Collector agent**: Gathers raw market data from HyperLiquid APIs and websockets
+- **Signal Manager**: Processes raw data into trading signals using configured strategies
+- **Position Manager**: Executes trades and manages open positions based on signals
+- **Trader agent**: LLM wrapper that makes final trading decisions based on signal narratives
+- **Orchestrator**: Coordinates all agents and manages system state
+
+#### 5.1.2 Trading strategies (Priority order)
+
+1. **Multi-timeframe Candlestick Narratives**
+   - Analyzes 1m, 5m, and 15m candlestick patterns simultaneously
+   - Constructs narrative descriptions of market structure
+   - Identifies pattern confluences across timeframes
+   - Latency tolerance: 500ms-2s
+
+2. **Funding Rate Narratives**
+   - Tracks perpetual funding rates and historical context
+   - Identifies extreme positioning and potential reversals
+   - Correlates with open interest changes
+   - Latency tolerance: 1-5s
+
+3. **Order Flow Imbalances (L2)**
+   - Processes full order book depth
+   - Identifies significant bid/ask walls and their evolution
+   - Detects institutional accumulation/distribution patterns
+   - Latency tolerance: 200ms-1s
+
+4. **Cross-Signal Intelligence**
+   - Synthesizes multiple data streams into unified narratives
+   - Weights signals based on market regime
+   - Provides holistic market assessment
+   - Latency tolerance: 1-2s
+
+5. **Volume Profile Evolution**
+   - Tracks volume distribution by price level
+   - Identifies value areas and volume nodes
+   - Monitors point of control migration
+   - Latency tolerance: 1-5s
+
+### 5.2 Operational modes
+
+#### 5.2.1 Data Collection mode
+- Connects to HyperLiquid APIs and websockets
+- Stores raw responses without modification
+- Maintains data integrity and timestamps
+- No trading decisions or analysis
+
+#### 5.2.2 Strategy Optimization mode
+- Uses historical data to backtest strategies
+- Optimizes parameters and thresholds
+- Generates performance reports
+- Identifies optimal signal combinations
+
+#### 5.2.3 Paper Trading mode
+- **Historical**: Replays stored data for strategy testing
+- **Live**: Processes real-time data without executing trades
+- Tracks hypothetical positions and P&L
+- Validates strategy performance
+
+#### 5.2.4 Live Trading mode
+- Executes actual trades on HyperLiquid
+- Manages real positions and capital
+- Implements risk management controls
+- Provides real-time monitoring
+
+### 5.3 Data requirements
+
+#### 5.3.1 Market data collection
+- 1-minute, 5-minute, and 15-minute candlestick data
+- Full L2 order book snapshots
+- Trade feed with individual transaction details
+- Funding rate history and current rates
+- Open interest metrics
+- Volume profile data
+
+#### 5.3.2 Storage specifications
+- Raw API responses stored in original JSON format
+- DuckDB database for structured data queries
+- Efficient compression for historical data
+- Fast retrieval for backtesting operations
+
+### 5.4 Performance requirements
+
+- **Profitability target**: 1% portfolio growth per 24 hours
+- **Uptime requirement**: 99.9% availability excluding maintenance
+- **Execution latency**: <100ms from signal to order submission
+- **Data processing**: Real-time processing of all incoming market data
+- **Resource efficiency**: Runnable on modest hardware (4 CPU cores, 8GB RAM)
+
+### 5.5 Security requirements
+
+- API keys stored securely in .env files
+- No external dependencies or cloud services required
+- All communications encrypted via HTTPS/WSS
+- Local execution prevents strategy exposure
+
+## 6. User stories and acceptance criteria
+
+### 6.1 System setup and configuration
+
+**ST-101: Initial system configuration**
+- As a trader, I want to configure the system with my API credentials and preferences
+- Acceptance criteria:
+  - System reads API keys from .env file
+  - Configuration file supports all trading parameters
+  - System validates API connectivity on startup
+  - Clear error messages for misconfiguration
+
+**ST-102: Secure access management**
+- As a system administrator, I want to ensure secure storage and access to sensitive credentials
+- Acceptance criteria:
+  - API keys are never logged or exposed
+  - .env file is excluded from version control
+  - System supports key rotation without downtime
+  - Failed authentication attempts are logged
+
+### 6.2 Database modeling and data management
+
+**ST-201: Database schema initialization**
+- As a developer, I want the system to automatically create required database schemas
+- Acceptance criteria:
+  - DuckDB database created on first run
+  - All tables created with proper indices
+  - Schema versioning supported for upgrades
+  - Data integrity constraints enforced
+
+**ST-202: Historical data storage**
+- As a researcher, I want to store all market data for future analysis
+- Acceptance criteria:
+  - Raw API responses stored without modification
+  - Efficient compression for long-term storage
+  - Fast query performance for backtesting
+  - Data retention policies configurable
+
+### 6.3 Data collection operations
+
+**ST-301: Start data collection**
+- As a trader, I want to begin collecting market data for selected trading pairs
+- Acceptance criteria:
+  - Data collection starts with single command
+  - Multiple pairs can be collected simultaneously
+  - Connection failures handled gracefully
+  - Progress and status clearly displayed
+
+**ST-302: Monitor data collection**
+- As a system operator, I want to monitor the health of data collection
+- Acceptance criteria:
+  - Real-time statistics on data ingestion
+  - Alert on connection failures
+  - Storage usage metrics available
+  - Collection can be paused/resumed
+
+### 6.4 Strategy development and testing
+
+**ST-401: Backtest trading strategies**
+- As a strategy developer, I want to test strategies on historical data
+- Acceptance criteria:
+  - Strategies can be backtested on any date range
+  - Performance metrics calculated accurately
+  - Transaction costs included in calculations
+  - Results exportable for analysis
+
+**ST-402: Optimize strategy parameters**
+- As a researcher, I want to find optimal parameters for strategies
+- Acceptance criteria:
+  - Parameter sweep functionality available
+  - Optimization objectives configurable
+  - Results ranked by performance metrics
+  - Best parameters saved for production use
+
+### 6.5 Paper trading operations
+
+**ST-501: Start paper trading on historical data**
+- As a trader, I want to test strategies on historical data in simulated environment
+- Acceptance criteria:
+  - Can replay any historical period
+  - Realistic order execution simulation
+  - Full position tracking and P&L calculation
+  - Performance reports generated
+
+**ST-502: Start paper trading on live data**
+- As a trader, I want to test strategies on real-time data without risk
+- Acceptance criteria:
+  - Processes live market data
+  - Simulates order execution realistically
+  - Tracks hypothetical positions
+  - Compares performance to actual market
+
+### 6.6 Live trading operations
+
+**ST-601: Initiate live trading**
+- As a trader, I want to start automated trading with real capital
+- Acceptance criteria:
+  - Explicit confirmation required for live mode
+  - Risk limits enforced automatically
+  - Position size constraints applied
+  - Emergency stop functionality available
+
+**ST-602: Monitor live trading performance**
+- As a trader, I want to monitor my bot's trading activity and performance
+- Acceptance criteria:
+  - Real-time position and P&L display
+  - Trade history with reasoning logged
+  - Performance metrics updated continuously
+  - Alerts for significant events
+
+### 6.7 Risk management
+
+**ST-701: Set position limits**
+- As a risk manager, I want to configure maximum position sizes and exposure
+- Acceptance criteria:
+  - Per-trade size limits enforced
+  - Total exposure limits maintained
+  - Leverage constraints applied
+  - Limits adjustable without restart
+
+**ST-702: Emergency shutdown**
+- As a trader, I want to immediately stop all trading and close positions
+- Acceptance criteria:
+  - Single command stops all trading
+  - Open positions closed at market
+  - System state saved for analysis
+  - Graceful shutdown of all components
+
+### 6.8 LLM integration
+
+**ST-801: Configure LLM providers**
+- As a developer, I want to use different LLM providers (OpenAI, Claude, local models)
+- Acceptance criteria:
+  - Multiple LLM providers supported
+  - Easy switching between providers
+  - API rate limits respected
+  - Fallback options available
+
+**ST-802: Generate trading narratives**
+- As a trader, I want to understand why the system made specific trades
+- Acceptance criteria:
+  - Natural language explanations for all trades
+  - Signal contributions clearly explained
+  - Confidence scores provided
+  - Historical decisions reviewable
+
+### 6.9 System maintenance
+
+**ST-901: Update system components**
+- As a developer, I want to update strategies and configurations without downtime
+- Acceptance criteria:
+  - Hot-reload for configuration changes
+  - Strategy updates without position disruption
+  - Version tracking for all components
+  - Rollback capability available
+
+**ST-902: Backup and restore**
+- As a system administrator, I want to backup system state and data
+- Acceptance criteria:
+  - Automated backup scheduling
+  - Full system state recoverable
+  - Data export for external analysis
+  - Backup integrity verification
+
+## 7. Technical requirements / Stack
+
+### 7.1 Core technologies
+
+- **Programming language**: Python 3.9+
+- **Data validation**: Pydantic v2.x for model definitions and validation
+- **Database**: DuckDB for local data storage and analytics
+- **LLM framework**: LangChain for LLM abstraction and chaining
+- **API client**: HyperLiquid official Python SDK
+- **Websocket**: HyperLiquid native websocket implementation
+
+### 7.2 Development dependencies
+
+- **Testing framework**: pytest for unit and integration testing
+- **Code quality**: black, ruff, mypy for formatting and type checking
+- **Documentation**: Sphinx for API documentation
+- **Version control**: Git with conventional commits
+
+### 7.3 Infrastructure requirements
+
+- **Operating system**: Linux (Ubuntu 20.04+) or macOS
+- **Hardware minimum**:
+  - CPU: 4 cores (Intel i5 equivalent or better)
+  - RAM: 8GB minimum, 16GB recommended
+  - Storage: 100GB SSD for data storage
+  - Network: Stable internet connection with <50ms latency to HyperLiquid
+
+### 7.4 External services
+
+- **LLM providers** (one required):
+  - OpenAI API (GPT-4 or GPT-3.5-turbo)
+  - Anthropic API (Claude 2 or Claude Instant)
+  - Local model via Ollama or similar
+- **Market data**: HyperLiquid exchange (no additional data providers needed)
+
+### 7.5 Development environment
+
+- **Package management**: Poetry or pip with requirements.txt
+- **Environment variables**: python-dotenv for configuration
+- **Logging**: Python standard logging with rotation
+- **Monitoring**: Prometheus metrics export (optional)
+
+## 8. Design and user interface
+
+### 8.1 Command-line interface
+
+The system operates primarily through CLI commands with clear, intuitive syntax:
+
+```bash
+# System initialization
+bistoury init --config config.yaml
+
+# Data collection
+bistoury collect --pairs BTC,ETH --mode continuous
+
+# Backtesting
+bistoury backtest --strategy multi-timeframe --from 2024-01-01 --to 2024-12-31
+
+# Paper trading
+bistoury paper-trade --mode historical --date 2024-06-15
+bistoury paper-trade --mode live --duration 24h
+
+# Live trading
+bistoury trade --confirm --risk-limit 1000
+
+# Monitoring
+bistoury status
+bistoury performance --period 7d
+```
+
+### 8.2 Configuration interface
+YAML-based configuration for human readability:
+```yaml
+trading:
+  pairs: ["BTC", "ETH"]
+  position_size_pct: 10
+  max_positions: 3
+  stop_loss_pct: 2
+  take_profit_pct: 5
+
+strategies:
+  multi_timeframe:
+    enabled: true
+    timeframes: ["1m", "5m", "15m"]
+    lookback_periods: 60
+    
+  funding_rate:
+    enabled: true
+    extreme_threshold: 0.0008
+    
+llm:
+  provider: "openai"
+  model: "gpt-4"
+  temperature: 0.7
+  max_tokens: 500
+```
+  
+### 8.3 Monitoring dashboard
+Text-based dashboard for terminal display:
+
+```
+╔════════════════════════════════════════════════════════════╗
+║                    BISTOURY TRADING SYSTEM                  ║
+╠════════════════════════════════════════════════════════════╣
+║ Status: LIVE TRADING        Uptime: 14d 7h 23m             ║
+║ Account: $10,483.27 (+4.83%)   24h PnL: +$97.43 (+0.94%)  ║
+╠════════════════════════════════════════════════════════════╣
+║ POSITIONS                                                   ║
+║ BTC-PERP  LONG   0.15 @ 67,845   PnL: +$23.40 (+0.23%)   ║
+║ ETH-PERP  SHORT  2.50 @ 3,456    PnL: -$12.30 (-0.14%)   ║
+╠════════════════════════════════════════════════════════════╣
+║ RECENT SIGNALS                                              ║
+║ 14:23:45  Multi-TF    BUY   Bullish divergence detected    ║
+║ 14:19:12  Funding     HOLD  Rate normalizing (0.0003)      ║
+║ 14:15:33  OrderFlow   SELL  Ask pressure building          ║
+╠════════════════════════════════════════════════════════════╣
+║ PERFORMANCE METRICS                                         ║
+║ Win Rate: 68.4%    Sharpe: 2.34    Max DD: -3.2%          ║
+╚════════════════════════════════════════════════════════════╝
+```
+### 8.4 Logging and output
+Structured logging with severity levels:
+
+```
+[2025-06-15 14:30:45] INFO: System initialized successfully
+[2025-06-15 14:30:46] INFO: Connected to HyperLiquid websocket
+[2025-06-15 14:30:47] INFO: Starting data collection for BTC, ETH
+[2025-06-15 14:31:15] SIGNAL: Multi-timeframe confluence detected on BTC
+[2025-06-15 14:31:16] TRADE: Opening LONG position BTC 0.15 @ 67,845
+[2025-06-15 14:31:16] LLM: "Strong bullish setup with volume confirmation. 
+                             15m showing accumulation pattern while 1m breaks 
+                             resistance. Funding neutral supports upside."
+[2025-06-15 14:35:22] PERF: Position +0.34% | Daily PnL: +0.89%
+```
+
+### 8.5 Error handling and user feedback
+Clear, actionable error messages:
+
+```
+ERROR: Connection to HyperLiquid failed
+  → Check your internet connection
+  → Verify API endpoint is accessible
+  → Review .env file for correct credentials
+  → Retry with: bistoury reconnect
+
+WARNING: Approaching position limit (8/10 max positions)
+  → Consider closing underperforming positions
+  → Adjust max_positions in config.yaml
+  → Current exposure: $8,234 of $10,000 limit
+```
+
+### 8.6 Performance visualization
+ASCII charts for terminal-based visualization:
+
+```
+Daily P&L (Last 30 days)
+     2.5% │     ╭─╮
+     2.0% │    ╱  ╰╮        ╭─╮
+     1.5% │   ╱    ╰─╮  ╭──╯  ╰╮
+     1.0% │╭─╯        ╰─╯      ╰─╮  ╭─ Target
+     0.5% ├────────────────────────╯────
+     0.0% │                          ╰─╮
+    -0.5% │                            ╰
+          └────────────────────────────────
+           May 15        May 30        Jun 14
+```
