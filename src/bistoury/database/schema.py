@@ -5,11 +5,12 @@ This module defines the database schema based on HyperLiquid API exploration.
 Designed for high-performance data storage and efficient querying.
 """
 
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Any
 import duckdb
 from datetime import datetime, timezone
 import logging
 import json
+from decimal import Decimal, InvalidOperation
 
 logger = logging.getLogger(__name__)
 
@@ -119,43 +120,64 @@ class MarketDataSchema:
         
     def create_orderbook_snapshots_table(self) -> None:
         """Create orderbook snapshots table."""
-        sql = """
-        CREATE TABLE IF NOT EXISTS orderbook_snapshots (
-            id INTEGER PRIMARY KEY,
-            symbol TEXT NOT NULL,
-            timestamp TIMESTAMP NOT NULL,
-            bids JSON NOT NULL,  -- Array of {px, sz, n} objects
-            asks JSON NOT NULL,  -- Array of {px, sz, n} objects
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-        )
+        # Order book snapshots table - Level 2 data with bids/asks
+        # HyperLiquid L2Book structure: 
+        # {"coin": "BTC", "time": 1748989278468, "levels": [[bids], [asks]]}
+        # Each level: {"px": "105699.0", "sz": "12.97221", "n": 30}
+        orderbook_snapshot_sql = """
+            CREATE TABLE IF NOT EXISTS orderbook_snapshots (
+                id BIGINT PRIMARY KEY,
+                symbol TEXT NOT NULL,
+                timestamp TIMESTAMP NOT NULL,
+                time_ms BIGINT NOT NULL,  -- HyperLiquid's original timestamp
+                bids JSON NOT NULL,       -- Array of {px, sz, n} objects
+                asks JSON NOT NULL,       -- Array of {px, sz, n} objects
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE(symbol, time_ms)
+            )
         """
-        self.db_manager.execute(sql)
+        
+        self.db_manager.execute(orderbook_snapshot_sql)
+        
+        # Create indices separately for DuckDB compatibility  
+        self.db_manager.execute("CREATE INDEX IF NOT EXISTS idx_orderbook_symbol_time ON orderbook_snapshots(symbol, timestamp)")
+        self.db_manager.execute("CREATE INDEX IF NOT EXISTS idx_orderbook_time_ms ON orderbook_snapshots(time_ms)")
         
         # Create sequence for orderbook snapshots
-        seq_sql = "CREATE SEQUENCE IF NOT EXISTS orderbook_snapshots_seq START 1"
-        self.db_manager.execute(seq_sql)
+        self.db_manager.execute("CREATE SEQUENCE IF NOT EXISTS orderbook_snapshots_seq START 1")
+        
+        # Create sequence for funding rates
+        self.db_manager.execute("CREATE SEQUENCE IF NOT EXISTS funding_rates_seq START 1")
         
         logger.info("Created orderbook_snapshots table")
         
     def create_funding_rates_table(self) -> None:
         """Create funding rates table for perpetual contracts."""
-        sql = """
-        CREATE TABLE IF NOT EXISTS funding_rates (
-            id INTEGER PRIMARY KEY,
-            symbol TEXT NOT NULL,
-            timestamp TIMESTAMP NOT NULL,
-            funding_rate DECIMAL(20,8) NOT NULL,
-            predicted_rate DECIMAL(20,8),
-            open_interest DECIMAL(20,8),
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            UNIQUE(symbol, timestamp)
-        )
+        # Funding rates table - Enhanced for HyperLiquid format
+        # HyperLiquid fundingHistory structure:
+        # {"coin": "BTC", "fundingRate": "0.0000125", "premium": "0.0004683623", "time": 1748905200002}
+        funding_rates_sql = """
+            CREATE TABLE IF NOT EXISTS funding_rates (
+                id BIGINT PRIMARY KEY,
+                symbol TEXT NOT NULL,
+                timestamp TIMESTAMP NOT NULL,
+                time_ms BIGINT NOT NULL,         -- HyperLiquid's original timestamp
+                funding_rate TEXT NOT NULL,      -- Stored as string for precision (like "0.0000125")
+                funding_rate_decimal DECIMAL(20, 10), -- Converted decimal for calculations
+                premium TEXT,                    -- Premium as string (like "0.0004683623")
+                premium_decimal DECIMAL(20, 10), -- Premium as decimal for calculations
+                predicted_rate TEXT,             -- For future predictions if available
+                open_interest TEXT,              -- Open interest if available
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE(symbol, time_ms)
+            )
         """
-        self.db_manager.execute(sql)
         
-        # Create sequence for funding rates
-        seq_sql = "CREATE SEQUENCE IF NOT EXISTS funding_rates_seq START 1"
-        self.db_manager.execute(seq_sql)
+        self.db_manager.execute(funding_rates_sql)
+        
+        # Create indices separately for DuckDB compatibility
+        self.db_manager.execute("CREATE INDEX IF NOT EXISTS idx_funding_symbol_time ON funding_rates(symbol, timestamp)")
+        self.db_manager.execute("CREATE INDEX IF NOT EXISTS idx_funding_time_ms ON funding_rates(time_ms)")
         
         logger.info("Created funding_rates table")
         
@@ -197,10 +219,10 @@ class MarketDataSchema:
         logger.info("Created performance indices")
         
     def drop_all_tables(self) -> None:
-        """Drop all market data tables (for testing/reset)."""
+        """Drop all tables for clean recreation."""
         tables = [
+            'orderbook_snapshots',
             'funding_rates',
-            'orderbook_snapshots', 
             'trades',
             'candles_1m', 'candles_5m', 'candles_15m', 
             'candles_1h', 'candles_4h', 'candles_1d',
@@ -208,10 +230,31 @@ class MarketDataSchema:
         ]
         
         for table in tables:
-            sql = f"DROP TABLE IF EXISTS {table}"
-            self.db_manager.execute(sql)
-            
-        logger.info("Dropped all market data tables")
+            try:
+                self.db_manager.execute(f"DROP TABLE IF EXISTS {table}")
+                logger.info(f"Dropped table: {table}")
+            except Exception as e:
+                logger.warning(f"Could not drop table {table}: {e}")
+                
+        # Drop sequences
+        sequences = [
+            'symbol_seq', 'candle_seq', 'trade_seq', 
+            'orderbook_snapshots_seq', 'funding_rates_seq'
+        ]
+        
+        for seq in sequences:
+            try:
+                self.db_manager.execute(f"DROP SEQUENCE IF EXISTS {seq}")
+                logger.info(f"Dropped sequence: {seq}")
+            except Exception as e:
+                logger.warning(f"Could not drop sequence {seq}: {e}")
+                
+    def recreate_all_tables(self) -> None:
+        """Drop and recreate all tables with fresh schema."""
+        logger.info("Recreating all tables with fresh schema...")
+        self.drop_all_tables()
+        self.create_all_tables()
+        logger.info("All tables recreated successfully")
         
     def get_schema_info(self) -> Dict:
         """Get information about the current schema."""
@@ -441,85 +484,116 @@ class DataInsertion:
         new_id_result = self.db_manager.execute("SELECT currval('trades_seq')")
         return new_id_result[0][0]
         
-    def insert_orderbook_snapshot(self, orderbook_data: Dict) -> int:
-        """Insert orderbook snapshot."""
-        # Convert timestamp from milliseconds
-        timestamp = datetime.fromtimestamp(orderbook_data['time'] / 1000, tz=timezone.utc)
+    def insert_orderbook_snapshot(self, data: Dict[str, Any]) -> None:
+        """
+        Insert a single order book snapshot from HyperLiquid L2Book format.
         
-        # Extract bids and asks from levels array
-        levels = orderbook_data.get('levels', [[], []])
-        bids = levels[0] if len(levels) > 0 else []
-        asks = levels[1] if len(levels) > 1 else []
+        Expected data format:
+        {
+            "coin": "BTC",
+            "time": 1748989278468,
+            "levels": [
+                [{"px": "105699.0", "sz": "12.97221", "n": 30}, ...],  # bids
+                [{"px": "105700.0", "sz": "5.5", "n": 15}, ...]        # asks
+            ]
+        }
+        """
+        if not isinstance(data, dict) or 'coin' not in data or 'time' not in data or 'levels' not in data:
+            raise ValueError("Invalid orderbook data format")
         
-        # Insert new orderbook snapshot
+        levels = data['levels']
+        if not isinstance(levels, list) or len(levels) != 2:
+            raise ValueError("Invalid levels format - expected [bids, asks]")
+        
+        # Convert millisecond timestamp to datetime
+        timestamp = datetime.fromtimestamp(data['time'] / 1000, tz=timezone.utc)
+        
         sql = """
-        INSERT INTO orderbook_snapshots
-        (id, symbol, timestamp, bids, asks)
-        VALUES (nextval('orderbook_snapshots_seq'), ?, ?, ?, ?)
+            INSERT INTO orderbook_snapshots 
+            (id, symbol, timestamp, time_ms, bids, asks, created_at)
+            VALUES (nextval('orderbook_snapshots_seq'), ?, ?, ?, ?, ?, ?)
+            ON CONFLICT (symbol, time_ms) DO UPDATE SET
+                timestamp = EXCLUDED.timestamp,
+                bids = EXCLUDED.bids,
+                asks = EXCLUDED.asks,
+                created_at = EXCLUDED.created_at
         """
         
-        values = (
-            orderbook_data['coin'],
+        # Store bids and asks as JSON strings
+        bids_json = json.dumps(levels[0]) if levels[0] else '[]'
+        asks_json = json.dumps(levels[1]) if levels[1] else '[]'
+        
+        self.db_manager.execute(sql, (
+            data['coin'],
             timestamp,
-            json.dumps(bids),  # Convert to proper JSON string
-            json.dumps(asks)   # Convert to proper JSON string
-        )
+            data['time'],
+            bids_json,
+            asks_json,
+            datetime.now(timezone.utc)
+        ))
+
+    def insert_funding_rate(self, data: Dict[str, Any]) -> None:
+        """
+        Insert a single funding rate record from HyperLiquid fundingHistory format.
         
-        self.db_manager.execute(sql, values)
+        Expected data format:
+        {
+            "coin": "BTC",
+            "fundingRate": "0.0000125",
+            "premium": "0.0004683623", 
+            "time": 1748905200002
+        }
+        """
+        if not isinstance(data, dict) or 'coin' not in data or 'time' not in data:
+            raise ValueError("Invalid funding rate data format")
         
-        # Get the inserted ID
-        new_id_result = self.db_manager.execute("SELECT currval('orderbook_snapshots_seq')")
-        return new_id_result[0][0]
+        # Convert millisecond timestamp to datetime
+        timestamp = datetime.fromtimestamp(data['time'] / 1000, tz=timezone.utc)
         
-    def insert_funding_rate(self, funding_data: Dict) -> int:
-        """Insert funding rate data."""
-        timestamp = datetime.fromtimestamp(funding_data['timestamp'] / 1000, tz=timezone.utc)
+        # Convert string values to decimals for calculations (handle empty/null values)
+        funding_rate_decimal = None
+        premium_decimal = None
         
-        # Check if funding rate already exists
-        existing_sql = "SELECT id FROM funding_rates WHERE symbol = ? AND timestamp = ?"
-        existing_result = self.db_manager.execute(existing_sql, (funding_data['symbol'], timestamp))
+        if 'fundingRate' in data and data['fundingRate']:
+            try:
+                funding_rate_decimal = Decimal(data['fundingRate'])
+            except (ValueError, TypeError, InvalidOperation):
+                pass
+                
+        if 'premium' in data and data['premium']:
+            try:
+                premium_decimal = Decimal(data['premium'])
+            except (ValueError, TypeError, InvalidOperation):
+                pass
         
-        if existing_result:
-            # Update existing funding rate
-            sql = """
-            UPDATE funding_rates SET
-                funding_rate = ?,
-                predicted_rate = ?,
-                open_interest = ?
-            WHERE symbol = ? AND timestamp = ?
-            """
-            
-            values = (
-                float(funding_data['funding_rate']),
-                funding_data.get('predicted_rate'),
-                funding_data.get('open_interest'),
-                funding_data['symbol'],
-                timestamp
-            )
-            
-            self.db_manager.execute(sql, values)
-            return existing_result[0][0]
-        else:
-            # Insert new funding rate
-            sql = """
-            INSERT INTO funding_rates
-            (id, symbol, timestamp, funding_rate, predicted_rate, open_interest)
-            VALUES (nextval('funding_rates_seq'), ?, ?, ?, ?, ?)
-            """
-            
-            values = (
-                funding_data['symbol'],
-                timestamp,
-                float(funding_data['funding_rate']),
-                funding_data.get('predicted_rate'),
-                funding_data.get('open_interest')
-            )
-            
-            self.db_manager.execute(sql, values)
-            
-            # Get the inserted ID
-            new_id_result = self.db_manager.execute("SELECT currval('funding_rates_seq')")
-            return new_id_result[0][0]
+        sql = """
+            INSERT INTO funding_rates 
+            (id, symbol, timestamp, time_ms, funding_rate, funding_rate_decimal, 
+             premium, premium_decimal, predicted_rate, open_interest, created_at)
+            VALUES (nextval('funding_rates_seq'), ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT (symbol, time_ms) DO UPDATE SET
+                timestamp = EXCLUDED.timestamp,
+                funding_rate = EXCLUDED.funding_rate,
+                funding_rate_decimal = EXCLUDED.funding_rate_decimal,
+                premium = EXCLUDED.premium,
+                premium_decimal = EXCLUDED.premium_decimal,
+                predicted_rate = EXCLUDED.predicted_rate,
+                open_interest = EXCLUDED.open_interest,
+                created_at = EXCLUDED.created_at
+        """
+        
+        self.db_manager.execute(sql, (
+            data['coin'],
+            timestamp,
+            data['time'],
+            data.get('fundingRate', ''),
+            funding_rate_decimal,
+            data.get('premium', ''),
+            premium_decimal,
+            data.get('predictedRate', ''),
+            data.get('openInterest', ''),
+            datetime.now(timezone.utc)
+        ))
         
     def bulk_insert_candles(self, timeframe: str, candles: List[Dict]) -> int:
         """Bulk insert candlestick data for better performance."""
@@ -629,30 +703,164 @@ class DataQuery:
         
         return [dict(zip(columns, row)) for row in results]
         
-    def get_latest_orderbook(self, symbol: str) -> Optional[Dict]:
-        """Get the latest orderbook snapshot for a symbol."""
+    def get_orderbook_snapshots(
+        self, 
+        symbol: str, 
+        start_time: Optional[datetime] = None,
+        end_time: Optional[datetime] = None,
+        limit: int = 100
+    ) -> List[Dict[str, Any]]:
+        """
+        Get orderbook snapshots for a symbol within a time range.
+        
+        Returns data in HyperLiquid-compatible format with parsed bids/asks.
+        """
         sql = """
-        SELECT * FROM orderbook_snapshots 
-        WHERE symbol = ? 
-        ORDER BY timestamp DESC 
-        LIMIT 1
+            SELECT symbol, timestamp, time_ms, bids, asks, created_at
+            FROM orderbook_snapshots 
+            WHERE symbol = ?
+        """
+        params = [symbol]
+        
+        if start_time:
+            sql += " AND timestamp >= ?"
+            params.append(start_time)
+            
+        if end_time:
+            sql += " AND timestamp <= ?"
+            params.append(end_time)
+            
+        sql += " ORDER BY timestamp DESC LIMIT ?"
+        params.append(limit)
+        
+        results = self.db_manager.execute(sql, params)
+        
+        # Parse JSON data and format results
+        snapshots = []
+        for row in results:
+            try:
+                bids = json.loads(row[3]) if row[3] else []
+                asks = json.loads(row[4]) if row[4] else []
+                
+                snapshots.append({
+                    'coin': row[0],
+                    'timestamp': row[1],
+                    'time': row[2],  # Original HyperLiquid timestamp
+                    'levels': [bids, asks],
+                    'created_at': row[5]
+                })
+            except json.JSONDecodeError as e:
+                logger.warning(f"Failed to parse JSON for orderbook snapshot: {e}")
+                continue
+                
+        return snapshots
+
+    def get_funding_rates(
+        self,
+        symbol: str,
+        start_time: Optional[datetime] = None,
+        end_time: Optional[datetime] = None,
+        limit: int = 100
+    ) -> List[Dict[str, Any]]:
+        """
+        Get funding rates for a symbol within a time range.
+        
+        Returns data in HyperLiquid-compatible format.
+        """
+        sql = """
+            SELECT symbol, timestamp, time_ms, funding_rate, funding_rate_decimal,
+                   premium, premium_decimal, predicted_rate, open_interest, created_at
+            FROM funding_rates 
+            WHERE symbol = ?
+        """
+        params = [symbol]
+        
+        if start_time:
+            sql += " AND timestamp >= ?"
+            params.append(start_time)
+            
+        if end_time:
+            sql += " AND timestamp <= ?"
+            params.append(end_time)
+            
+        sql += " ORDER BY timestamp DESC LIMIT ?"
+        params.append(limit)
+        
+        results = self.db_manager.execute(sql, params)
+        
+        # Format results in HyperLiquid format
+        rates = []
+        for row in results:
+            rates.append({
+                'coin': row[0],
+                'timestamp': row[1],
+                'time': row[2],  # Original HyperLiquid timestamp
+                'fundingRate': row[3],  # String value as received from API
+                'fundingRateDecimal': float(row[4]) if row[4] is not None else None,
+                'premium': row[5],
+                'premiumDecimal': float(row[6]) if row[6] is not None else None,
+                'predictedRate': row[7],
+                'openInterest': row[8],
+                'created_at': row[9]
+            })
+                
+        return rates
+        
+    def get_latest_orderbook(self, symbol: str) -> Optional[Dict[str, Any]]:
+        """Get the most recent orderbook snapshot for a symbol."""
+        sql = """
+            SELECT symbol, timestamp, time_ms, bids, asks, created_at
+            FROM orderbook_snapshots 
+            WHERE symbol = ?
+            ORDER BY time_ms DESC 
+            LIMIT 1
         """
         
-        results = self.db_manager.execute(sql, (symbol,))
-        
+        results = self.db_manager.execute(sql, [symbol])
         if not results:
             return None
             
-        result = results[0]
-        columns = ['id', 'symbol', 'timestamp', 'bids', 'asks', 'created_at']
-        orderbook = dict(zip(columns, result))
-        
-        # Parse JSON fields
+        row = results[0]
         try:
-            orderbook['bids'] = json.loads(orderbook['bids'])
-            orderbook['asks'] = json.loads(orderbook['asks'])
-        except (json.JSONDecodeError, TypeError):
-            # If JSON parsing fails, keep as string
-            pass
+            bids = json.loads(row[3]) if row[3] else []
+            asks = json.loads(row[4]) if row[4] else []
             
-        return orderbook 
+            return {
+                'coin': row[0],
+                'timestamp': row[1],
+                'time': row[2],
+                'levels': [bids, asks],
+                'created_at': row[5]
+            }
+        except json.JSONDecodeError as e:
+            logger.warning(f"Failed to parse JSON for latest orderbook: {e}")
+            return None
+            
+    def get_latest_funding_rate(self, symbol: str) -> Optional[Dict[str, Any]]:
+        """Get the most recent funding rate for a symbol."""
+        sql = """
+            SELECT symbol, timestamp, time_ms, funding_rate, funding_rate_decimal,
+                   premium, premium_decimal, predicted_rate, open_interest, created_at
+            FROM funding_rates 
+            WHERE symbol = ?
+            ORDER BY time_ms DESC 
+            LIMIT 1
+        """
+        
+        results = self.db_manager.execute(sql, [symbol])
+        if not results:
+            return None
+            
+        row = results[0]
+        return {
+            'coin': row[0],
+            'timestamp': row[1],
+            'time': row[2],
+            'fundingRate': row[3],
+            'fundingRateDecimal': float(row[4]) if row[4] is not None else None,
+            'premium': row[5],
+            'premiumDecimal': float(row[6]) if row[6] is not None else None,
+            'predictedRate': row[7],
+            'openInterest': row[8],
+            'created_at': row[9]
+        } 

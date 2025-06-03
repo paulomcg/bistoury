@@ -112,11 +112,65 @@ class HyperLiquidExplorer:
                 )
                 trades_data = response.json()
                 print(f"✅ Recent trades structure:")
-                print(json.dumps(trades_data, indent=2)[:800] + "...")
-                self.responses["recentTrades"] = trades_data
+                print(json.dumps(trades_data[0] if trades_data else {}, indent=2)[:600] + "...")
+                self.responses["recentTrades"] = trades_data[0] if trades_data else []
                 
             except Exception as e:
                 print(f"❌ Error getting trades: {e}")
+                
+            # Get funding rates
+            try:
+                print("\n💰 Getting funding rate for BTC...")
+                response = await client.post(
+                    f"{self.rest_url}/info",
+                    json={
+                        "type": "fundingHistory",
+                        "coin": "BTC",
+                        "startTime": int((datetime.now().timestamp() - 24*3600) * 1000)  # Last 24 hours
+                    }
+                )
+                funding_data = response.json()
+                print(f"✅ Funding rate structure:")
+                print(json.dumps(funding_data[0] if funding_data else {}, indent=2)[:400] + "...")
+                self.responses["fundingHistory"] = funding_data[0] if funding_data else {}
+                
+            except Exception as e:
+                print(f"❌ Error getting funding rates: {e}")
+                
+            # Get open interest  
+            try:
+                print("\n📊 Getting open interest...")
+                response = await client.post(
+                    f"{self.rest_url}/info",
+                    json={
+                        "type": "openInterest"
+                    }
+                )
+                oi_data = response.json()
+                print(f"✅ Open interest structure:")
+                print(json.dumps(oi_data[0] if oi_data else {}, indent=2)[:400] + "...")
+                self.responses["openInterest"] = oi_data[0] if oi_data else {}
+                
+            except Exception as e:
+                print(f"❌ Error getting open interest: {e}")
+                
+            # Get funding rate current
+            try:
+                print("\n⚡ Getting current funding rate...")
+                response = await client.post(
+                    f"{self.rest_url}/info",
+                    json={
+                        "type": "clearinghouseState",
+                        "user": "0x0000000000000000000000000000000000000000"  # Anonymous query
+                    }
+                )
+                clearing_data = response.json()
+                print(f"✅ Clearinghouse state structure:")
+                print(json.dumps(clearing_data, indent=2)[:400] + "...")
+                self.responses["clearinghouseState"] = clearing_data
+                
+            except Exception as e:
+                print(f"❌ Error getting clearinghouse state: {e}")
 
     async def explore_websocket_feeds(self):
         """Explore WebSocket real-time data feeds."""
