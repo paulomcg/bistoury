@@ -120,9 +120,25 @@ class Config(BaseModel):
             if env_path.exists():
                 load_dotenv(env_path)
         
-        # Database config
+        # Database config with environment variable support
+        database_name = os.getenv("BISTOURY_DATABASE", "production")  # Default to production
+        
+        # Map database names to file paths
+        database_paths = {
+            "production": os.getenv("DATABASE_PATH", "./data/bistoury.db"),
+            "test": os.getenv("TEST_DATABASE_PATH", "./data/test.duckdb"), 
+            "memory": ":memory:"
+        }
+        
+        # Get the appropriate database path
+        if database_name in database_paths:
+            db_path = database_paths[database_name]
+        else:
+            # If custom database name provided, use it as path directly
+            db_path = database_name
+            
         database = DatabaseConfig(
-            path=os.getenv("DATABASE_PATH", "./data/bistoury.db"),
+            path=db_path,
             backup_path=os.getenv("DATABASE_BACKUP_PATH", "./backups/"),
             max_connections=int(os.getenv("DATABASE_MAX_CONNECTIONS", "10")),
             connection_timeout=int(os.getenv("DATABASE_CONNECTION_TIMEOUT", "30")),
