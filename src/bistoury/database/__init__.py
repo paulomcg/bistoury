@@ -1,12 +1,15 @@
-"""Database management for Bistoury.
+"""
+Database package for Bistoury.
 
-This module provides database connectivity, schema management,
-and data persistence for the trading system.
+Provides database connection management and schema operations.
 """
 
-from .connection import DatabaseManager, get_connection
+from .connection import DatabaseManager
+from .schema import MarketDataSchema, DataInsertion, DataQuery
 
 __all__ = [
-    "DatabaseManager",
-    "get_connection",
+    'DatabaseManager',
+    'MarketDataSchema', 
+    'DataInsertion',
+    'DataQuery'
 ] 
