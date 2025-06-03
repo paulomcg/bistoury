@@ -28,16 +28,16 @@ The test database contains real historical trading data:
 
 ```bash
 # List all available databases
-poetry run python -c "from src.bistoury.cli.commands import cli; cli()" db-list
+poetry run bistoury db-list
 
 # Switch to test database with connection test
-poetry run python -c "from src.bistoury.cli.commands import cli; cli()" db-switch test --test
+poetry run bistoury db-switch test --test
 
 # Get detailed statistics
-poetry run python -c "from src.bistoury.cli.commands import cli; cli()" db-stats test --detailed
+poetry run bistoury db-stats test --detailed
 
 # Switch back to production
-poetry run python -c "from src.bistoury.cli.commands import cli; cli()" db-switch production
+poetry run bistoury db-switch production
 ```
 
 ### 2. Using Environment Variables
@@ -51,6 +51,9 @@ BISTOURY_DATABASE=production poetry run python your_script.py
 
 # Run with in-memory database (for testing)
 BISTOURY_DATABASE=memory poetry run python your_script.py
+
+# Use environment variables with other commands
+BISTOURY_DATABASE=test poetry run bistoury status
 ```
 
 ### 3. Programmatic Usage

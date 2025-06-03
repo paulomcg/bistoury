@@ -36,7 +36,7 @@ def init(config):
         if config:
             cfg = Config.from_file(config)
         else:
-            cfg = Config()
+            cfg = Config.load_from_env()
             
         console.print("[green]✓[/green] Configuration loaded")
         
@@ -72,7 +72,7 @@ def init(config):
 def status():
     """Display system status."""
     try:
-        cfg = Config()
+        cfg = Config.load_from_env()
         db_manager = DatabaseManager(cfg)
         
         # Create status table
@@ -138,7 +138,7 @@ def status():
 def db_status():
     """Display detailed database status."""
     try:
-        cfg = Config()
+        cfg = Config.load_from_env()
         db_manager = DatabaseManager(cfg)
         
         # Get database info
@@ -167,7 +167,7 @@ def db_status():
 def db_info():
     """Display database schema information."""
     try:
-        cfg = Config()
+        cfg = Config.load_from_env()
         db_manager = DatabaseManager(cfg)
         schema = MarketDataSchema(db_manager)
         
@@ -218,7 +218,7 @@ def db_info():
 def db_reset():
     """Reset database schema (deletes all data)."""
     try:
-        cfg = Config()
+        cfg = Config.load_from_env()
         db_manager = DatabaseManager(cfg)
         schema = MarketDataSchema(db_manager)
         
