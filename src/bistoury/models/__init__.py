@@ -11,7 +11,8 @@ Core model categories:
 - api_responses: HyperLiquid API response models
 - websocket: WebSocket message models for real-time data
 - trading: Positions, orders, portfolio state, and trading operations
-- signals: Trading signals and strategy outputs (coming soon)
+- signals: Trading signals, patterns, and signal aggregation
+- strategies: Strategy outputs, performance tracking, and backtesting
 - database: Database-optimized models (coming soon)
 """
 
@@ -75,6 +76,29 @@ from .trading import (
     PortfolioState,
 )
 
+from .signals import (
+    SignalDirection,
+    SignalType,
+    ConfidenceLevel,
+    PatternType,
+    TradingSignal,
+    CandlestickPattern,
+    AnalysisContext,
+    SignalAggregation,
+)
+
+from .strategies import (
+    StrategyType,
+    StrategyStatus,
+    RiskLevel,
+    PerformanceMetric,
+    StrategyOutput,
+    SignalPerformance,
+    StrategyPerformance,
+    StrategyMetadata,
+    BacktestResult,
+)
+
 __all__ = [
     # Market Data Models
     "CandlestickData",
@@ -129,6 +153,27 @@ __all__ = [
     "TradeExecution",
     "RiskParameters",
     "PortfolioState",
+    
+    # Signal Models
+    "SignalDirection",
+    "SignalType",
+    "ConfidenceLevel",
+    "PatternType",
+    "TradingSignal",
+    "CandlestickPattern",
+    "AnalysisContext",
+    "SignalAggregation",
+    
+    # Strategy Models
+    "StrategyType",
+    "StrategyStatus",
+    "RiskLevel",
+    "PerformanceMetric",
+    "StrategyOutput",
+    "SignalPerformance",
+    "StrategyPerformance",
+    "StrategyMetadata",
+    "BacktestResult",
 ]
 
 __version__ = "1.0.0" 
