@@ -9,7 +9,7 @@ if command -v poetry &> /dev/null; then
     
     # Install dependencies with Poetry
     if ! poetry show hyperliquid-python-sdk &> /dev/null; then
-        echo "📦 Installing dependencies with Poetry..."
+        echo "📦 Installing dependencies with Poetry from pyproject.toml..."
         poetry install
         echo "✅ Poetry dependencies installed"
     fi
@@ -40,8 +40,11 @@ else
     
     # Check if dependencies are installed
     if ! python -c "import hyperliquid" 2>/dev/null; then
-        echo "📦 Installing dependencies from requirements.txt..."
-        pip install -r requirements.txt
+        echo "📦 Installing dependencies from pyproject.toml (editable mode)..."
+        pip install --upgrade pip setuptools wheel build
+        pip install -e .
+        echo "📦 Installing dev dependencies (pytest, etc.)..."
+        pip install pytest pytest-asyncio pytest-cov pytest-mock
         echo "✅ Dependencies installed"
     fi
     
@@ -53,6 +56,7 @@ else
     echo "  pytest tests/integration/ -v              # Run integration tests"
     echo "  python tests/run_tests.py                 # Run simple test suite"
     echo "  PYTHONPATH=. python tests/e2e/test_hyperliquid_complete.py  # Run e2e tests"
+    echo "  bistoury --help                           # Use CLI commands"
     echo ""
     echo "📚 To deactivate: deactivate"
     

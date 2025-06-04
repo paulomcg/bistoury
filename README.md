@@ -38,23 +38,27 @@ cd bistoury
 # Or manual setup:
 python3 -m venv venv
 source venv/bin/activate
-pip install hyperliquid-python-sdk duckdb python-dotenv pydantic schedule pytest pytest-asyncio
+# Install from pyproject.toml (includes all dependencies)
+pip install --upgrade pip setuptools wheel build
+pip install -e .
 
 # Copy environment template and configure API keys
 cp .env.example .env
 # Edit .env with your API credentials
 ```
 
-### Method 2: Using Poetry
+### Method 2: Using Poetry (Development)
 
 ```bash
-# Install dependencies using Poetry
+# Install dependencies using Poetry from pyproject.toml
 poetry install
 
 # Copy environment template and configure API keys
 cp .env.example .env
 # Edit .env with your API credentials
 ```
+
+**Note**: All dependencies are defined in `pyproject.toml` using modern Python packaging standards. This single file manages both production and development dependencies.
 
 ## Testing
 
