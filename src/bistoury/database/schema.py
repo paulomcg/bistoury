@@ -7,7 +7,7 @@ Designed for high-performance data storage and efficient querying.
 
 from typing import Dict, List, Optional, Any
 import duckdb
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 import logging
 import json
 from decimal import Decimal, InvalidOperation
@@ -380,7 +380,17 @@ class DataInsertion:
         
         # Convert timestamps from milliseconds to datetime
         start_ts = datetime.fromtimestamp(candle_data['t'] / 1000, tz=timezone.utc)
-        end_ts = datetime.fromtimestamp(candle_data['T'] / 1000, tz=timezone.utc)
+        
+        # Calculate end timestamp if not provided
+        if 'T' in candle_data:
+            end_ts = datetime.fromtimestamp(candle_data['T'] / 1000, tz=timezone.utc)
+        else:
+            # Calculate end time based on timeframe
+            timeframe_minutes = {
+                '1m': 1, '5m': 5, '15m': 15, '1h': 60, '4h': 240, '1d': 1440
+            }
+            minutes = timeframe_minutes.get(timeframe, 1)
+            end_ts = start_ts + timedelta(minutes=minutes)
         
         # Check if candle already exists
         existing_sql = f"SELECT id FROM {table_name} WHERE symbol = ? AND timestamp_start = ?"

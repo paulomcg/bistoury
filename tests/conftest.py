@@ -11,7 +11,8 @@ from typing import Generator
 import pytest
 from unittest.mock import patch
 
-from bistoury.config import Config
+from src.bistoury.config import Config
+from src.bistoury.database import DatabaseManager
 
 
 @pytest.fixture(scope="session")
@@ -51,6 +52,39 @@ def mock_env_vars() -> Generator[dict, None, None]:
 def test_config(mock_env_vars: dict) -> Config:
     """Create a test configuration instance."""
     return Config.load_from_env()
+
+
+@pytest.fixture
+async def test_database(temp_dir: Path) -> DatabaseManager:
+    """Create a test database instance."""
+    # Create test database in temp directory
+    test_db_path = temp_dir / "test_bistoury.db"
+    
+    # Override config to use test database
+    test_env = {
+        "DATABASE_PATH": str(test_db_path),
+        "LOG_LEVEL": "DEBUG"
+    }
+    
+    with patch.dict(os.environ, test_env, clear=False):
+        config = Config.load_from_env()
+        db_manager = DatabaseManager(config)
+        
+        # Initialize the database schema using MarketDataSchema
+        from src.bistoury.database.schema import MarketDataSchema
+        schema = MarketDataSchema(db_manager)
+        schema.create_all_tables()
+        
+        yield db_manager
+        
+        # Cleanup
+        try:
+            if hasattr(db_manager, 'close_all_connections'):
+                db_manager.close_all_connections()
+            if test_db_path.exists():
+                test_db_path.unlink()
+        except Exception:
+            pass  # Ignore cleanup errors
 
 
 @pytest.fixture

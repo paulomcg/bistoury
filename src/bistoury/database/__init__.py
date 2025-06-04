@@ -14,6 +14,22 @@ from .database_switcher import (
     switch_database,
     get_compatible_query
 )
+from .compression import (
+    DataCompressionManager,
+    RetentionPolicy,
+    CompressionStats
+)
+from .indices import (
+    PerformanceIndexManager,
+    IndexDefinition,
+    IndexPerformanceStats
+)
+from .backup import (
+    BackupManager,
+    BackupMetadata,
+    BackupConfig,
+    RestorePoint
+)
 
 __all__ = [
     'DatabaseManager',
@@ -25,5 +41,15 @@ __all__ = [
     'CompatibleDataQuery',
     'get_database_switcher',
     'switch_database',
-    'get_compatible_query'
+    'get_compatible_query',
+    'DataCompressionManager',
+    'RetentionPolicy',
+    'CompressionStats',
+    'PerformanceIndexManager',
+    'IndexDefinition',
+    'IndexPerformanceStats',
+    'BackupManager',
+    'BackupMetadata',
+    'BackupConfig',
+    'RestorePoint'
 ] 
