@@ -10,7 +10,7 @@ Core model categories:
 - trades: Individual trade executions and aggregated analytics
 - api_responses: HyperLiquid API response models
 - websocket: WebSocket message models for real-time data
-- trading: Positions, orders, portfolio state (coming soon)
+- trading: Positions, orders, portfolio state, and trading operations
 - signals: Trading signals and strategy outputs (coming soon)
 - database: Database-optimized models (coming soon)
 """
@@ -62,6 +62,19 @@ from .websocket import (
     MessageRouter,
 )
 
+from .trading import (
+    PositionSide,
+    OrderType,
+    OrderStatus,
+    OrderSide,
+    TimeInForce,
+    Position,
+    Order,
+    TradeExecution,
+    RiskParameters,
+    PortfolioState,
+)
+
 __all__ = [
     # Market Data Models
     "CandlestickData",
@@ -104,6 +117,18 @@ __all__ = [
     "CandleUpdateMessage",
     "SubscriptionMessage",
     "MessageRouter",
+    
+    # Trading Models
+    "PositionSide",
+    "OrderType",
+    "OrderStatus",
+    "OrderSide",
+    "TimeInForce",
+    "Position",
+    "Order",
+    "TradeExecution",
+    "RiskParameters",
+    "PortfolioState",
 ]
 
 __version__ = "1.0.0" 
