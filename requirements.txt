@@ -1,0 +1,17 @@
+# Core dependencies for Bistoury trading system
+hyperliquid-python-sdk>=0.15.0
+duckdb>=1.3.0
+python-dotenv>=1.1.0
+pydantic>=2.11.0
+schedule>=1.2.0
+
+# Testing dependencies
+pytest>=8.4.0
+pytest-asyncio>=1.0.0
+
+# Optional development dependencies
+# (uncomment if needed for development)
+# black>=24.0.0
+# ruff>=0.7.0
+# mypy>=1.11.0
+# pre-commit>=3.8.0 
