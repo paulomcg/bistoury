@@ -40,12 +40,10 @@ else
     
     # Check if dependencies are installed
     if ! python -c "import hyperliquid" 2>/dev/null; then
-        echo "📦 Installing dependencies from pyproject.toml (editable mode)..."
+        echo "📦 Installing dependencies from pyproject.toml (including dev dependencies)..."
         pip install --upgrade pip setuptools wheel build
-        pip install -e .
-        echo "📦 Installing dev dependencies (pytest, etc.)..."
-        pip install pytest pytest-asyncio pytest-cov pytest-mock
-        echo "✅ Dependencies installed"
+        pip install -e .[dev]
+        echo "✅ All dependencies installed from pyproject.toml"
     fi
     
     echo "🎉 Virtual environment activated!"
