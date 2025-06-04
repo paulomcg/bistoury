@@ -9,7 +9,7 @@ Core model categories:
 - orderbook: Order book levels, snapshots, and analytics
 - trades: Individual trade executions and aggregated analytics
 - api_responses: HyperLiquid API response models
-- websocket: WebSocket message models (coming soon)
+- websocket: WebSocket message models for real-time data
 - trading: Positions, orders, portfolio state (coming soon)
 - signals: Trading signals and strategy outputs (coming soon)
 - database: Database-optimized models (coming soon)
@@ -50,6 +50,18 @@ from .api_responses import (
     ResponseWrapper,
 )
 
+from .websocket import (
+    MessageType,
+    SubscriptionChannel,
+    WSMessage,
+    PriceUpdateMessage,
+    TradeUpdateMessage,
+    OrderBookUpdateMessage,
+    CandleUpdateMessage,
+    SubscriptionMessage,
+    MessageRouter,
+)
+
 __all__ = [
     # Market Data Models
     "CandlestickData",
@@ -81,6 +93,17 @@ __all__ = [
     "TradeHistoryResponse",
     "OrderBookResponse",
     "ResponseWrapper",
+    
+    # WebSocket Models
+    "MessageType",
+    "SubscriptionChannel",
+    "WSMessage",
+    "PriceUpdateMessage",
+    "TradeUpdateMessage",
+    "OrderBookUpdateMessage",
+    "CandleUpdateMessage",
+    "SubscriptionMessage",
+    "MessageRouter",
 ]
 
 __version__ = "1.0.0" 
