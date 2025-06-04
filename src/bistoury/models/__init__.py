@@ -8,7 +8,7 @@ Core model categories:
 - market_data: Candlesticks, tickers, symbol information, timeframes
 - orderbook: Order book levels, snapshots, and analytics
 - trades: Individual trade executions and aggregated analytics
-- api_responses: HyperLiquid API response models (coming soon)
+- api_responses: HyperLiquid API response models
 - websocket: WebSocket message models (coming soon)
 - trading: Positions, orders, portfolio state (coming soon)
 - signals: Trading signals and strategy outputs (coming soon)
@@ -37,6 +37,19 @@ from .trades import (
     TradeAnalytics,
 )
 
+from .api_responses import (
+    ErrorResponse,
+    ResponseMetadata,
+    MetadataResponse,
+    AllMidsResponse,
+    PositionInfo,
+    UserInfoResponse,
+    CandleHistoryResponse,
+    TradeHistoryResponse,
+    OrderBookResponse,
+    ResponseWrapper,
+)
+
 __all__ = [
     # Market Data Models
     "CandlestickData",
@@ -56,6 +69,18 @@ __all__ = [
     "Trade",
     "TradeAggregation",
     "TradeAnalytics",
+    
+    # API Response Models
+    "ErrorResponse",
+    "ResponseMetadata",
+    "MetadataResponse",
+    "AllMidsResponse",
+    "PositionInfo",
+    "UserInfoResponse",
+    "CandleHistoryResponse",
+    "TradeHistoryResponse",
+    "OrderBookResponse",
+    "ResponseWrapper",
 ]
 
 __version__ = "1.0.0" 
