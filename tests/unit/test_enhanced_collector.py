@@ -322,11 +322,10 @@ class TestEnhancedDataCollector:
         call_args = mock_db_manager.execute_many.call_args
         query = call_args[0][0]
         
-        # Check that readable field names are used in the query
+        # Check that readable field names are used in the query (new schema)
         assert 'symbol' in query
-        assert 'interval' in query
-        assert 'open_time_ms' in query
-        assert 'close_time_ms' in query
+        assert 'timestamp_start' in query
+        assert 'timestamp_end' in query
         assert 'open_price' in query
         assert 'high_price' in query
         assert 'low_price' in query

@@ -62,6 +62,8 @@ class CollectorStats:
     trades_collected: int = 0
     orderbooks_collected: int = 0
     funding_rates_collected: int = 0
+    historical_requests: int = 0
+    total_candles_stored: int = 0
     errors: int = 0
     validation_errors: int = 0
     batches_processed: int = 0
@@ -75,6 +77,8 @@ class CollectorStats:
             'trades_collected': self.trades_collected,
             'orderbooks_collected': self.orderbooks_collected,
             'funding_rates_collected': self.funding_rates_collected,
+            'historical_requests': self.historical_requests,
+            'total_candles_stored': self.total_candles_stored,
             'errors': self.errors,
             'validation_errors': self.validation_errors,
             'batches_processed': self.batches_processed,
@@ -903,64 +907,46 @@ class EnhancedDataCollector:
             for interval, candles in candles_by_timeframe.items():
                 table_name = f"candles_{interval}"
                 
-                batch_id = f"candles_{interval}_{int(datetime.now(timezone.utc).timestamp())}"
-                batch_op = DBBatchOperation(
-                    batch_id=batch_id,
-                    operation_type="INSERT",
-                    table_name=table_name,
-                    record_count=len(candles),
-                    start_time=datetime.now(timezone.utc)
-                )
-                
-                # Get the next ID for insertion
-                result = self.db_manager.execute(f"SELECT COALESCE(max(id), 0) + 1 as next_id FROM {table_name}")
-                start_id = result[0][0] if result and result[0] else 1
-                
-                # Batch insert with enhanced models - include explicit IDs
-                insert_query = f"""
-                    INSERT INTO {table_name} 
-                    (id, symbol, interval, open_time_ms, close_time_ms, open_price, high_price, low_price, close_price, volume, trade_count, timestamp_start, timestamp_end)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                    ON CONFLICT (symbol, open_time_ms) DO UPDATE SET
-                    interval = EXCLUDED.interval,
-                    close_time_ms = EXCLUDED.close_time_ms,
-                    open_price = EXCLUDED.open_price,
-                    high_price = EXCLUDED.high_price,
-                    low_price = EXCLUDED.low_price,
-                    close_price = EXCLUDED.close_price,
-                    volume = EXCLUDED.volume,
-                    trade_count = EXCLUDED.trade_count,
-                    timestamp_start = EXCLUDED.timestamp_start,
-                    timestamp_end = EXCLUDED.timestamp_end
+                # Use the new schema (matches DBCandlestickData and MarketDataSchema)
+                # Use NEXTVAL for the id column since DuckDB requires explicit ID values
+                query = f"""
+                    INSERT OR IGNORE INTO {table_name} 
+                    (id, symbol, timestamp_start, timestamp_end, open_price, high_price, low_price, close_price, volume, trade_count)
+                    VALUES (NEXTVAL('{table_name}_seq'), ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """
                 
-                params = [
-                    (
-                        start_id + i,  # Explicit ID assignment
-                        candle.symbol,                                      # symbol (HyperLiquid 's')
-                        interval,                                           # interval (HyperLiquid 'i')
-                        int(candle.timestamp_start.timestamp() * 1000),    # open_time_ms (HyperLiquid 't')
-                        int(candle.timestamp_end.timestamp() * 1000),      # close_time_ms (HyperLiquid 'T')
-                        candle.open_price,                                  # open_price (HyperLiquid 'o')
-                        candle.high_price,                                  # high_price (HyperLiquid 'h')
-                        candle.low_price,                                   # low_price (HyperLiquid 'l')
-                        candle.close_price,                                 # close_price (HyperLiquid 'c')
-                        candle.volume,                                      # volume (HyperLiquid 'v')
-                        candle.trade_count,                                 # trade_count (HyperLiquid 'n')
-                        candle.timestamp_start,                             # timestamp_start (for indexing)
-                        candle.timestamp_end                                # timestamp_end (for indexing)
-                    )
-                    for i, (candle, _) in enumerate(candles)
-                ]
+                # Prepare bulk insert data
+                insert_data = []
+                for candle_model, _ in candles:
+                    try:
+                        # Validate the model before insertion
+                        if not self._validate_candle_data(candle_model):
+                            logger.warning(f"Skipping invalid candle: {candle_model}")
+                            continue
+                        
+                        insert_data.append((
+                            candle_model.symbol,
+                            candle_model.timestamp_start,
+                            candle_model.timestamp_end,
+                            candle_model.open_price,
+                            candle_model.high_price,
+                            candle_model.low_price,
+                            candle_model.close_price,
+                            candle_model.volume,
+                            candle_model.trade_count or 0
+                        ))
+                    except Exception as e:
+                        logger.error(f"Error preparing candle data: {e}")
+                        continue
                 
-                self.db_manager.execute_many(insert_query, params)
-                
-                # Complete batch operation
-                batch_op.mark_completed(success=True)
-                self.batch_operations[batch_id] = batch_op
-                self.stats.batches_processed += 1
+                if insert_data:
+                    # Execute the insert
+                    self.db_manager.execute_many(query, insert_data)
+                    stored_count = len(insert_data)
+                    
+                    self.stats.candles_collected += stored_count
+                    logger.info(f"✅ Flushed {stored_count} candles to {table_name}")
             
-            self.stats.candles_collected += len(self.candle_buffer)
             logger.debug(f"Enhanced flush: {len(self.candle_buffer)} candle records to database")
             self.candle_buffer.clear()
             
@@ -1236,55 +1222,39 @@ class EnhancedDataCollector:
                 start_time=datetime.now(timezone.utc)
             )
             
-            # Get the next ID for insertion
-            result = self.db_manager.execute(f"SELECT COALESCE(max(id), 0) + 1 as next_id FROM {table_name}")
-            start_id = result[0][0] if result and result[0] else 1
-            
-            # Batch insert with enhanced models - include explicit IDs
-            insert_query = f"""
-                INSERT INTO {table_name} 
-                (id, symbol, interval, open_time_ms, close_time_ms, open_price, high_price, low_price, close_price, volume, trade_count, timestamp_start, timestamp_end)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                ON CONFLICT (symbol, open_time_ms) DO UPDATE SET
-                interval = EXCLUDED.interval,
-                close_time_ms = EXCLUDED.close_time_ms,
-                open_price = EXCLUDED.open_price,
-                high_price = EXCLUDED.high_price,
-                low_price = EXCLUDED.low_price,
-                close_price = EXCLUDED.close_price,
-                volume = EXCLUDED.volume,
-                trade_count = EXCLUDED.trade_count,
-                timestamp_start = EXCLUDED.timestamp_start,
-                timestamp_end = EXCLUDED.timestamp_end
+            # Use the new schema (matches DBCandlestickData and MarketDataSchema)
+            # Use NEXTVAL for the id column since DuckDB requires explicit ID values
+            query = f"""
+                INSERT OR IGNORE INTO {table_name} 
+                (id, symbol, timestamp_start, timestamp_end, open_price, high_price, low_price, close_price, volume, trade_count)
+                VALUES (NEXTVAL('{table_name}_seq'), ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """
             
-            params = [
-                (
-                    start_id + i,  # Explicit ID assignment
-                    candle.symbol,                                      # symbol (HyperLiquid 's')
-                    interval,                                           # interval (HyperLiquid 'i')
-                    int(candle.timestamp_start.timestamp() * 1000),    # open_time_ms (HyperLiquid 't')
-                    int(candle.timestamp_end.timestamp() * 1000),      # close_time_ms (HyperLiquid 'T')
-                    candle.open_price,                                  # open_price (HyperLiquid 'o')
-                    candle.high_price,                                  # high_price (HyperLiquid 'h')
-                    candle.low_price,                                   # low_price (HyperLiquid 'l')
-                    candle.close_price,                                 # close_price (HyperLiquid 'c')
-                    candle.volume,                                      # volume (HyperLiquid 'v')
-                    candle.trade_count,                                 # trade_count (HyperLiquid 'n')
-                    candle.timestamp_start,                             # timestamp_start (for indexing)
-                    candle.timestamp_end                                # timestamp_end (for indexing)
-                )
-                for i, candle in enumerate(candles)
-            ]
+            # Prepare bulk insert data
+            insert_data = []
+            for candle in candles:
+                insert_data.append((
+                    candle.symbol,
+                    candle.timestamp_start,
+                    candle.timestamp_end,
+                    candle.open_price,
+                    candle.high_price,
+                    candle.low_price,
+                    candle.close_price,
+                    candle.volume,
+                    candle.trade_count
+                ))
             
-            self.db_manager.execute_many(insert_query, params)
+            # Execute the insert
+            self.db_manager.execute_many(query, insert_data)
+            stored_count = len(insert_data)
             
             # Complete batch operation
             batch_op.mark_completed(success=True)
             self.batch_operations[batch_id] = batch_op
             self.stats.batches_processed += 1
             
-            return len(candles)
+            return stored_count
             
         except Exception as e:
             logger.error(f"Failed to store enhanced historical candles: {e}")
@@ -1540,7 +1510,7 @@ class EnhancedDataCollector:
             
             table_name = table_map.get(interval, 'candles_1m')
             
-            # Convert HyperLiquid format to database format
+            # Convert HyperLiquid format to database format using NEW SCHEMA
             db_candles = []
             for candle in candles:
                 try:
@@ -1551,18 +1521,25 @@ class EnhancedDataCollector:
                         continue
                     
                     # Convert to datetime
-                    timestamp = datetime.fromtimestamp(timestamp_ms / 1000, tz=timezone.utc)
+                    timestamp_start = datetime.fromtimestamp(timestamp_ms / 1000, tz=timezone.utc)
+                    
+                    # Calculate end timestamp based on timeframe
+                    timeframe_minutes = {
+                        '1m': 1, '5m': 5, '15m': 15, '1h': 60, '4h': 240, '1d': 1440
+                    }
+                    minutes = timeframe_minutes.get(interval, 1)
+                    timestamp_end = timestamp_start + timedelta(minutes=minutes)
                     
                     db_candle = {
                         'symbol': symbol,
-                        'open_price': float(candle.get('o', 0)),
-                        'high_price': float(candle.get('h', 0)),
-                        'low_price': float(candle.get('l', 0)),
-                        'close_price': float(candle.get('c', 0)),
-                        'volume': float(candle.get('v', 0)),
-                        'trade_count': int(candle.get('n', 0)),
-                        'timestamp_start': timestamp,
-                        'timestamp_end': timestamp  # For interval data, start and end are typically the same
+                        'timestamp_start': timestamp_start,
+                        'timestamp_end': timestamp_end,
+                        'open_price': str(candle.get('o', 0)),
+                        'high_price': str(candle.get('h', 0)),
+                        'low_price': str(candle.get('l', 0)),
+                        'close_price': str(candle.get('c', 0)),
+                        'volume': str(candle.get('v', 0)),
+                        'trade_count': int(candle.get('n', 0))
                     }
                     
                     db_candles.append(db_candle)
@@ -1575,65 +1552,45 @@ class EnhancedDataCollector:
                 logger.warning(f"No valid candles to store for {symbol}")
                 return 0
             
-            # Use database manager to insert
-            # This assumes the database manager has a method to insert candles
-            # We'll need to use the data insertion component
-            try:
-                # Get database connection
-                with self.db_manager.get_connection() as conn:
-                    # Prepare INSERT query with ON CONFLICT handling
-                    sequence_name = f"{table_name}_seq"
-                    query = f"""
-                    INSERT INTO {table_name} 
-                    (id, symbol, interval, open_time_ms, close_time_ms, open_price, high_price, low_price, close_price, volume, trade_count, timestamp_start, timestamp_end)
-                    VALUES (nextval('{sequence_name}'), ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                    ON CONFLICT (symbol, open_time_ms) DO UPDATE SET
-                    interval = EXCLUDED.interval,
-                    close_time_ms = EXCLUDED.close_time_ms,
-                    open_price = EXCLUDED.open_price,
-                    high_price = EXCLUDED.high_price,
-                    low_price = EXCLUDED.low_price,
-                    close_price = EXCLUDED.close_price,
-                    volume = EXCLUDED.volume,
-                    trade_count = EXCLUDED.trade_count,
-                    timestamp_start = EXCLUDED.timestamp_start,
-                    timestamp_end = EXCLUDED.timestamp_end
+            # Use database-specific insertion with NEW SCHEMA
+            with self.db_manager.get_connection() as conn:
+                cursor = conn.cursor()
+                
+                # Insert using the new schema (matches DBCandlestickData and MarketDataSchema)
+                # Use NEXTVAL for the id column since DuckDB requires explicit ID values
+                query = f"""
+                    INSERT OR IGNORE INTO {table_name} 
+                    (id, symbol, timestamp_start, timestamp_end, open_price, high_price, low_price, close_price, volume, trade_count)
+                    VALUES (NEXTVAL('{table_name}_seq'), ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """
-                    
-                    # Execute batch insert
-                    cursor = conn.cursor()
-                    insert_data = [
-                        (
-                            candle['symbol'],                              # symbol (HyperLiquid 's')
-                            interval,                                      # interval (HyperLiquid 'i')
-                            int(candle['timestamp_start'].timestamp() * 1000),  # open_time_ms (HyperLiquid 't')
-                            int(candle['timestamp_end'].timestamp() * 1000),    # close_time_ms (HyperLiquid 'T')
-                            candle['open_price'],                          # open_price (HyperLiquid 'o')
-                            candle['high_price'],                          # high_price (HyperLiquid 'h')
-                            candle['low_price'],                           # low_price (HyperLiquid 'l')
-                            candle['close_price'],                         # close_price (HyperLiquid 'c')
-                            candle['volume'],                              # volume (HyperLiquid 'v')
-                            candle['trade_count'],                         # trade_count (HyperLiquid 'n')
-                            candle['timestamp_start'],                     # timestamp_start (for indexing)
-                            candle['timestamp_end']                        # timestamp_end (for indexing)
-                        )
-                        for candle in db_candles
-                    ]
-                    
-                    cursor.executemany(query, insert_data)
-                    conn.commit()
-                    
-                    inserted_count = len(db_candles)
-                    logger.debug(f"Stored {inserted_count} candles in {table_name}")
-                    
-                    return inserted_count
-                    
-            except Exception as db_error:
-                logger.error(f"Database error storing candles: {db_error}")
-                return 0
-            
+                
+                # Prepare insert data to match the new schema
+                insert_data = []
+                for candle in db_candles:
+                    insert_data.append((
+                        candle['symbol'],
+                        candle['timestamp_start'],
+                        candle['timestamp_end'],
+                        candle['open_price'],
+                        candle['high_price'],
+                        candle['low_price'],
+                        candle['close_price'],
+                        candle['volume'],
+                        candle.get('trade_count', 0)  # Default to 0 if not provided
+                    ))
+                
+                # Execute the insert
+                self.db_manager.execute_many(query, insert_data)
+                stored_count = len(insert_data)
+                
+                self.stats.historical_requests += 1
+                self.stats.total_candles_stored += stored_count
+                
+                logger.info(f"Stored {stored_count} historical candles for {symbol} ({interval}) in {table_name}")
+                return stored_count
+                
         except Exception as e:
-            logger.error(f"Failed to store historical candles: {e}")
+            logger.error(f"Database error storing candles: {e}")
             return 0
 
     async def backfill_missing_data(
@@ -1755,6 +1712,19 @@ class DataCollector(EnhancedDataCollector):
             'errors': 0,
             'last_activity': None
         }
+    
+    @property
+    def symbols(self) -> Set[str]:
+        """Get symbols for backward compatibility."""
+        return self.config.symbols
+    
+    @symbols.setter
+    def symbols(self, value: Union[Set[str], List[str]]) -> None:
+        """Set symbols for backward compatibility."""
+        if isinstance(value, list):
+            self.config.symbols = set(value)
+        else:
+            self.config.symbols = value
     
     def get_stats(self) -> Dict[str, Any]:
         """Get stats in old format for compatibility."""
