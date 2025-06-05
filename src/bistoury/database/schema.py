@@ -68,6 +68,9 @@ class MarketDataSchema:
         CREATE TABLE IF NOT EXISTS {} (
             id INTEGER PRIMARY KEY,
             symbol TEXT NOT NULL,
+            interval TEXT NOT NULL,
+            open_time_ms BIGINT NOT NULL,
+            close_time_ms BIGINT NOT NULL,
             timestamp_start TIMESTAMP NOT NULL,
             timestamp_end TIMESTAMP NOT NULL,
             open_price DECIMAL(20,8) NOT NULL,
