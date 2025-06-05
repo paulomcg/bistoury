@@ -139,42 +139,50 @@ class HyperLiquidIntegration:
     """
     
     def __init__(self, config: Optional[Config] = None):
+        """
+        Initialize HyperLiquid integration with rate limiting and monitoring.
+        
+        Args:
+            config: Optional configuration object
+        """
         self.config = config or Config.load_from_env()
         
-        # Determine API URL based on configuration
+        # API Configuration
         self.base_url = self._get_api_url()
         
-        # Initialize the official SDK components
-        self.info = Info(base_url=self.base_url, skip_ws=True)
-        self.ws_manager: Optional[WebsocketManager] = None
-        self.exchange: Optional[Exchange] = None
+        # Initialize rate limiter and monitoring
+        self.rate_limiter = RateLimiter(
+            requests_per_second=getattr(self.config, 'hyperliquid_rate_limit', 10.0),
+            burst_size=20
+        )
+        self.monitor = ConnectionMonitor()
+        
+        # Connection state
+        self.connected = False
+        self.ws_manager = None
+        self._main_loop = None  # Store main event loop reference
+        
+        # Subscription tracking
+        self.subscriptions: Dict[str, Dict[str, Any]] = {}
+        self.message_handlers: Dict[str, List[Callable]] = {}
+        
+        # Initialize official SDK components
+        self.info = Info(self.base_url, skip_ws=True)  # REST API only
+        
+        # Retry configuration
+        self.max_retries = 3
+        self.base_retry_delay = 1.0
+        self.max_retry_delay = 10.0
+        
+        logger.info(f"HyperLiquid integration initialized with base URL: {self.base_url}")
         
         # Authentication setup
         self.private_key = self.config.api.hyperliquid_private_key
         self.wallet_address = self.config.api.hyperliquid_wallet_address
         
-        # Connection tracking
-        self.connected = False
-        self.subscriptions: Dict[str, Any] = {}
-        
-        # Data handlers
-        self.message_handlers: Dict[str, List[Callable]] = {}
-        
-        # Rate limiting and monitoring
-        self.rate_limiter = RateLimiter(requests_per_second=10.0, burst_size=20)
-        self.monitor = ConnectionMonitor()
-        
         # Connection optimization
-        self.max_retries = 3
-        self.base_retry_delay = 1.0
-        self.max_retry_delay = 30.0
-        self.connection_timeout = 10.0
-        
-        # Subscription management
         self.max_subscriptions = 50
         self.subscription_health: Dict[str, bool] = {}
-        
-        logger.info(f"HyperLiquid integration initialized with base URL: {self.base_url}")
         
         # If authenticated, initialize exchange API
         if self.private_key:
@@ -187,10 +195,8 @@ class HyperLiquidIntegration:
     
     def _get_api_url(self) -> str:
         """Get the appropriate API URL based on configuration."""
-        if self.config.trading.mode == "live":
-            return constants.MAINNET_API_URL
-        else:
-            return constants.TESTNET_API_URL
+        # Always use mainnet for live market data collection
+        return constants.MAINNET_API_URL
     
     async def connect(self) -> bool:
         """
@@ -214,6 +220,15 @@ class HyperLiquidIntegration:
             await asyncio.sleep(0.5)
             
             self.connected = True
+            # Store the running event loop for handler scheduling
+            try:
+                self._main_loop = asyncio.get_running_loop()
+                logger.debug(f"Stored main event loop: {self._main_loop}")
+            except RuntimeError:
+                # Fallback for environments where no loop is running
+                self._main_loop = asyncio.get_event_loop()
+                logger.warning("No running loop found, using get_event_loop() fallback")
+                
             logger.info("Successfully connected to HyperLiquid WebSocket")
             
             return True
@@ -255,6 +270,41 @@ class HyperLiquidIntegration:
         
         self.message_handlers[subscription_type].append(handler)
         logger.debug(f"Added message handler for subscription type: {subscription_type}")
+    
+    def _schedule_async_handler(self, handler: Callable, message: Dict[str, Any], handler_type: str) -> None:
+        """
+        Schedule an async handler to run in the main event loop.
+        
+        Args:
+            handler: Async handler function to call
+            message: Message to pass to the handler
+            handler_type: Type of handler for logging purposes
+        """
+        try:
+            # Check if we have a valid main loop reference
+            if not hasattr(self, '_main_loop') or not self._main_loop:
+                logger.warning(f"Could not schedule async {handler_type} handler: no main loop stored")
+                return
+            
+            # Check if the loop is still running and not closed
+            if self._main_loop.is_closed():
+                logger.warning(f"Could not schedule async {handler_type} handler: main loop is closed")
+                return
+            
+            # Try to schedule the handler
+            future = asyncio.run_coroutine_threadsafe(handler(message), self._main_loop)
+            
+            # Optional: Add a done callback to handle any exceptions
+            def handle_result(fut):
+                try:
+                    fut.result()  # This will raise any exception that occurred
+                except Exception as e:
+                    logger.error(f"Exception in async {handler_type} handler: {e}")
+            
+            future.add_done_callback(handle_result)
+            
+        except Exception as e:
+            logger.warning(f"Could not schedule async {handler_type} handler: {e}")
     
     async def subscribe_all_mids(self, handler: Optional[Callable] = None) -> bool:
         """
@@ -355,8 +405,7 @@ class HyperLiquidIntegration:
             self.ws_manager.subscribe(subscription, self._handle_trades_message)
             
             # Track subscription
-            subscription_key = f'trades_{symbol}'
-            self.subscriptions[subscription_key] = subscription
+            self.subscriptions[f'trades_{symbol}'] = subscription
             
             logger.info(f"Successfully subscribed to trades for {symbol}")
             return True
@@ -364,23 +413,58 @@ class HyperLiquidIntegration:
         except Exception as e:
             logger.error(f"Failed to subscribe to trades for {symbol}: {e}")
             return False
+
+    async def subscribe_candle(self, symbol: str, interval: str, handler: Optional[Callable] = None) -> bool:
+        """
+        Subscribe to candle/kline updates for a specific symbol and interval.
+        
+        Args:
+            symbol: Trading symbol (e.g., 'BTC')
+            interval: Candle interval (e.g., '1m', '5m', '15m', '1h', '4h', '1d')
+            handler: Optional callback function for candle updates
+            
+        Returns:
+            bool: True if subscription successful
+        """
+        if not self.connected or not self.ws_manager:
+            logger.error("WebSocket not connected")
+            return False
+        
+        try:
+            # Add handler if provided
+            if handler:
+                self.add_message_handler('candle', handler)
+            
+            # Subscribe using official SDK format (based on HyperLiquid docs)
+            subscription = {"type": "candle", "coin": symbol, "interval": interval}
+            
+            # Use the WebSocket manager's subscribe method
+            self.ws_manager.subscribe(subscription, self._handle_candle_message)
+            
+            # Track subscription
+            self.subscriptions[f'candle_{symbol}_{interval}'] = subscription
+            
+            logger.info(f"Successfully subscribed to {interval} candles for {symbol}")
+            return True
+            
+        except Exception as e:
+            logger.error(f"Failed to subscribe to {interval} candles for {symbol}: {e}")
+            return False
     
     def _handle_all_mids_message(self, message: Dict[str, Any]) -> None:
         """Handle all mids price update messages."""
         try:
             # Call registered handlers
             for handler in self.message_handlers.get('allMids', []):
-                # Since WebSocket manager is thread-based, we need to handle both sync and async
-                if asyncio.iscoroutinefunction(handler):
-                    # Schedule async handlers to run in the event loop
-                    try:
-                        loop = asyncio.get_event_loop()
-                        loop.create_task(handler(message))
-                    except RuntimeError:
-                        # No event loop running, skip async handlers
-                        logger.warning("No event loop available for async handler")
-                else:
-                    handler(message)
+                try:
+                    # Since WebSocket manager is thread-based, we need to handle both sync and async
+                    if asyncio.iscoroutinefunction(handler):
+                        # Use threadsafe method to schedule async handlers
+                        self._schedule_async_handler(handler, message, "all mids")
+                    else:
+                        handler(message)
+                except Exception as e:
+                    logger.error(f"Error in all mids message handler: {e}")
                     
         except Exception as e:
             logger.error(f"Error handling all mids message: {e}")
@@ -391,43 +475,65 @@ class HyperLiquidIntegration:
             # Extract symbol from message
             data = message.get('data', {})
             symbol = data.get('coin', 'unknown')
-            subscription_key = f'l2Book_{symbol}'
             
-            # Call registered handlers
-            for handler in self.message_handlers.get(subscription_key, []):
-                if asyncio.iscoroutinefunction(handler):
-                    try:
-                        loop = asyncio.get_event_loop()
-                        loop.create_task(handler(message))
-                    except RuntimeError:
-                        logger.warning("No event loop available for async handler")
-                else:
-                    handler(message)
+            # Call registered handlers - use 'l2Book' as the general handler key
+            for handler in self.message_handlers.get('l2Book', []):
+                try:
+                    if asyncio.iscoroutinefunction(handler):
+                        # Use threadsafe method to schedule async handlers
+                        self._schedule_async_handler(handler, message, f"order book {symbol}")
+                    else:
+                        handler(message)
+                except Exception as e:
+                    logger.error(f"Error in order book message handler: {e}")
                     
         except Exception as e:
             logger.error(f"Error handling order book message: {e}")
     
     def _handle_trades_message(self, message: Dict[str, Any]) -> None:
-        """Handle trade update messages."""
+        """
+        Handle incoming trade messages.
+        
+        Args:
+            message: WebSocket message containing trade data
+        """
         try:
-            # Extract symbol from message
-            data = message.get('data', {})
-            symbol = data.get('coin', 'unknown') if isinstance(data, dict) else 'unknown'
-            subscription_key = f'trades_{symbol}'
-            
-            # Call registered handlers
-            for handler in self.message_handlers.get(subscription_key, []):
-                if asyncio.iscoroutinefunction(handler):
-                    try:
-                        loop = asyncio.get_event_loop()
-                        loop.create_task(handler(message))
-                    except RuntimeError:
-                        logger.warning("No event loop available for async handler")
-                else:
-                    handler(message)
-                    
+            # Call all registered handlers for trades
+            for handler in self.message_handlers.get('trades', []):
+                try:
+                    # Handle both async and sync handlers
+                    if asyncio.iscoroutinefunction(handler):
+                        # Use threadsafe method to schedule async handlers in main loop
+                        self._schedule_async_handler(handler, message, "trades")
+                    else:
+                        handler(message)
+                except Exception as e:
+                    logger.error(f"Error in trades message handler: {e}")
         except Exception as e:
             logger.error(f"Error handling trades message: {e}")
+
+    def _handle_candle_message(self, message: Dict[str, Any]) -> None:
+        """
+        Handle incoming candle/kline messages.
+        
+        Args:
+            message: WebSocket message containing candle data
+        """
+        try:
+            # Call all registered handlers for candles
+            for handler in self.message_handlers.get('candle', []):
+                try:
+                    # Handle both async and sync handlers
+                    if asyncio.iscoroutinefunction(handler):
+                        # Use threadsafe method to schedule async handlers in main loop
+                        self._schedule_async_handler(handler, message, "candles")
+                    else:
+                        handler(message)
+                except Exception as e:
+                    logger.error(f"Error in candles message handler: {e}")
+                    
+        except Exception as e:
+            logger.error(f"Error handling candles message: {e}")
     
     # REST API Methods using official SDK
     
@@ -759,6 +865,46 @@ class HyperLiquidIntegration:
             logger.error(f"Failed to get order book for {symbol}: {e}")
             return {}
     
+    async def get_funding_rate(self, symbol: str) -> Optional[Dict[str, Any]]:
+        """
+        Get the current funding rate for a symbol.
+        
+        Args:
+            symbol: Trading symbol (e.g., 'BTC')
+            
+        Returns:
+            Dictionary with funding rate information or None if not available
+        """
+        try:
+            meta = await self._make_api_call("get_funding_rate", self.info.meta)
+            
+            if not meta or 'universe' not in meta:
+                return None
+                
+            # Find the symbol in the universe
+            for coin_info in meta['universe']:
+                if coin_info.get('name') == symbol:
+                    # Check if funding rate information is available
+                    if 'funding' in coin_info:
+                        return {
+                            'fundingRate': coin_info['funding'].get('fundingRate', '0'),
+                            'premium': coin_info['funding'].get('premium'),
+                            'nextFundingTime': coin_info['funding'].get('nextFundingTime')
+                        }
+                    else:
+                        # Return a placeholder structure for symbols that don't have funding rates
+                        return {
+                            'fundingRate': '0',
+                            'premium': None,
+                            'nextFundingTime': None
+                        }
+            
+            return None
+            
+        except Exception as e:
+            logger.error(f"Failed to get funding rate for {symbol}: {e}")
+            return None
+    
     async def health_check(self) -> bool:
         """Perform a simple health check of the API."""
         try:
@@ -774,9 +920,9 @@ class HyperLiquidIntegration:
     def get_connection_info(self) -> Dict[str, Any]:
         """Get connection information."""
         return {
-            "base_url": "https://api.hyperliquid-testnet.xyz",
-            "ws_url": "wss://api.hyperliquid-testnet.xyz/ws",
-            "testnet": True  # Always testnet for safety during development
+            "base_url": "https://api.hyperliquid.xyz",
+            "ws_url": "wss://api.hyperliquid.xyz/ws",
+            "testnet": False  # Using mainnet for live market data collection
         }
     
     def is_authenticated(self) -> bool:
@@ -852,7 +998,7 @@ class HyperLiquidIntegration:
                 'configuration': {
                     'base_url': self.base_url,
                     'max_retries': self.max_retries,
-                    'connection_timeout': self.connection_timeout,
+                    'connection_timeout': self.max_retry_delay,
                     'authenticated': self.is_authenticated()
                 }
             }

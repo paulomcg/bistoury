@@ -241,24 +241,13 @@ class EnhancedDataCollector:
     async def _initialize_database_tables(self) -> None:
         """Initialize database tables for enhanced data storage."""
         try:
-            # Create tables for each data type using the schema from database models
-            table_configs = [
-                ('candles_1m', 'Candlestick data - 1 minute'),
-                ('candles_5m', 'Candlestick data - 5 minutes'),
-                ('candles_15m', 'Candlestick data - 15 minutes'), 
-                ('candles_1h', 'Candlestick data - 1 hour'),
-                ('candles_4h', 'Candlestick data - 4 hours'),
-                ('candles_1d', 'Candlestick data - 1 day'),
-                ('trades', 'Trade execution data'),
-                ('order_book_snapshots', 'Order book snapshots'),
-                ('funding_rates', 'Funding rate data'),
-                ('batch_operations', 'Batch operation tracking'),
-            ]
+            # Use the standard schema from database.schema module
+            from ..database.schema import MarketDataSchema
             
-            for table_name, description in table_configs:
-                await self._create_optimized_table(table_name, description)
-                
-            logger.info("Database tables initialized successfully")
+            schema = MarketDataSchema(self.db_manager)
+            schema.create_all_tables()
+            
+            logger.info("Database tables initialized successfully using standard schema")
             
         except Exception as e:
             logger.error(f"Failed to initialize database tables: {e}")
@@ -845,7 +834,7 @@ class EnhancedDataCollector:
             batch_op = DBBatchOperation(
                 batch_id=batch_id,
                 operation_type="INSERT",
-                table_name="order_book_snapshots",
+                table_name="orderbook_snapshots",
                 record_count=len(self.orderbook_buffer),
                 start_time=datetime.now(timezone.utc)
             )
@@ -907,25 +896,36 @@ class EnhancedDataCollector:
             for interval, candles in candles_by_timeframe.items():
                 table_name = f"candles_{interval}"
                 
-                # Use the new schema (matches DBCandlestickData and MarketDataSchema)
-                # Use NEXTVAL for the id column since DuckDB requires explicit ID values
+                    # Use the new schema (matches DBCandlestickData and MarketDataSchema)
+                # Get the next ID for insertion to avoid sequence issues
+                result = self.db_manager.execute(f"SELECT COALESCE(max(id), 0) + 1 as next_id FROM {table_name}")
+                start_id = result[0][0] if result and result[0] else 1
+                
                 query = f"""
                     INSERT OR IGNORE INTO {table_name} 
-                    (id, symbol, timestamp_start, timestamp_end, open_price, high_price, low_price, close_price, volume, trade_count)
-                    VALUES (NEXTVAL('{table_name}_seq'), ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    (id, symbol, interval, open_time_ms, close_time_ms, timestamp_start, timestamp_end, open_price, high_price, low_price, close_price, volume, trade_count)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """
                 
                 # Prepare bulk insert data
                 insert_data = []
-                for candle_model, _ in candles:
+                for i, (candle_model, candle_interval) in enumerate(candles):
                     try:
                         # Validate the model before insertion
                         if not self._validate_candle_data(candle_model):
                             logger.warning(f"Skipping invalid candle: {candle_model}")
                             continue
                         
+                        # Calculate millisecond timestamps from datetime fields
+                        open_time_ms = int(candle_model.timestamp_start.timestamp() * 1000)
+                        close_time_ms = int(candle_model.timestamp_end.timestamp() * 1000)
+                        
                         insert_data.append((
+                            start_id + i,  # Explicit ID assignment
                             candle_model.symbol,
+                            candle_interval,  # Add the interval field!
+                            open_time_ms,  # Add the open_time_ms field!
+                            close_time_ms,  # Add the close_time_ms field!
                             candle_model.timestamp_start,
                             candle_model.timestamp_end,
                             candle_model.open_price,
@@ -1223,18 +1223,29 @@ class EnhancedDataCollector:
             )
             
             # Use the new schema (matches DBCandlestickData and MarketDataSchema)
-            # Use NEXTVAL for the id column since DuckDB requires explicit ID values
+            # Get the next ID for insertion to avoid sequence issues  
+            result = self.db_manager.execute(f"SELECT COALESCE(max(id), 0) + 1 as next_id FROM {table_name}")
+            start_id = result[0][0] if result and result[0] else 1
+            
             query = f"""
                 INSERT OR IGNORE INTO {table_name} 
-                (id, symbol, timestamp_start, timestamp_end, open_price, high_price, low_price, close_price, volume, trade_count)
-                VALUES (NEXTVAL('{table_name}_seq'), ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                (id, symbol, interval, open_time_ms, close_time_ms, timestamp_start, timestamp_end, open_price, high_price, low_price, close_price, volume, trade_count)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """
             
             # Prepare bulk insert data
             insert_data = []
-            for candle in candles:
+            for i, candle in enumerate(candles):
+                # Calculate millisecond timestamps from datetime fields
+                open_time_ms = int(candle.timestamp_start.timestamp() * 1000)
+                close_time_ms = int(candle.timestamp_end.timestamp() * 1000)
+                
                 insert_data.append((
+                    start_id + i,  # Explicit ID assignment
                     candle.symbol,
+                    interval,  # Add the interval field!
+                    open_time_ms,  # Add the open_time_ms field!
+                    close_time_ms,  # Add the close_time_ms field!
                     candle.timestamp_start,
                     candle.timestamp_end,
                     candle.open_price,
@@ -1557,18 +1568,29 @@ class EnhancedDataCollector:
                 cursor = conn.cursor()
                 
                 # Insert using the new schema (matches DBCandlestickData and MarketDataSchema)
-                # Use NEXTVAL for the id column since DuckDB requires explicit ID values
+                # Get the next ID for insertion to avoid sequence issues
+                result = self.db_manager.execute(f"SELECT COALESCE(max(id), 0) + 1 as next_id FROM {table_name}")
+                start_id = result[0][0] if result and result[0] else 1
+                
                 query = f"""
                     INSERT OR IGNORE INTO {table_name} 
-                    (id, symbol, timestamp_start, timestamp_end, open_price, high_price, low_price, close_price, volume, trade_count)
-                    VALUES (NEXTVAL('{table_name}_seq'), ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    (id, symbol, interval, open_time_ms, close_time_ms, timestamp_start, timestamp_end, open_price, high_price, low_price, close_price, volume, trade_count)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """
                 
                 # Prepare insert data to match the new schema
                 insert_data = []
-                for candle in db_candles:
+                for i, candle in enumerate(db_candles):
+                    # Calculate millisecond timestamps from datetime fields
+                    open_time_ms = int(candle['timestamp_start'].timestamp() * 1000)
+                    close_time_ms = int(candle['timestamp_end'].timestamp() * 1000)
+                    
                     insert_data.append((
+                        start_id + i,  # Explicit ID assignment
                         candle['symbol'],
+                        interval,  # Add the interval field!
+                        open_time_ms,  # Add the open_time_ms field!
+                        close_time_ms,  # Add the close_time_ms field!
                         candle['timestamp_start'],
                         candle['timestamp_end'],
                         candle['open_price'],
