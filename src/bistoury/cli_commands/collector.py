@@ -43,15 +43,14 @@ def signal_handler(signum, frame):
     if _collector_instance:
         console.print("\n[yellow]Received shutdown signal, stopping collector gracefully...[/yellow]")
         try:
-            loop = asyncio.get_event_loop()
-            if loop.is_running():
-                asyncio.create_task(_collector_instance.stop())
-            else:
-                asyncio.run(_collector_instance.stop())
+            # Set the running flag to False to trigger graceful shutdown
+            _collector_instance.running = False
+            # Note: We don't call sys.exit(0) here as it causes threading issues
+            # The main loop will handle the actual shutdown
         except Exception as e:
             console.print(f"[red]Error during shutdown: {e}[/red]")
-    
-    sys.exit(0)
+            # Only exit with error if there was an exception
+            sys.exit(1)
 
 # Register signal handlers
 signal.signal(signal.SIGINT, signal_handler)

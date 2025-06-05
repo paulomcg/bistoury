@@ -241,21 +241,45 @@ class HyperLiquidIntegration:
     async def disconnect(self) -> None:
         """Disconnect from HyperLiquid WebSocket."""
         try:
-            if self.ws_manager:
-                self.ws_manager.stop()
-                # Wait for thread to stop
-                if self.ws_manager.is_alive():
-                    self.ws_manager.join(timeout=2.0)
-                self.ws_manager = None
+            logger.info("Initiating HyperLiquid WebSocket disconnection...")
             
+            # First, mark as disconnected to stop message processing
             self.connected = False
+            
+            # Clear subscriptions and handlers first to prevent new processing
             self.subscriptions.clear()
             self.message_handlers.clear()
             
-            logger.info("Disconnected from HyperLiquid WebSocket")
+            # Clear the main loop reference to prevent scheduling
+            self._main_loop = None
+            
+            # Now stop the WebSocket manager
+            if self.ws_manager:
+                try:
+                    logger.debug("Stopping WebSocket manager...")
+                    self.ws_manager.stop()
+                    
+                    # Wait for thread to stop with a longer timeout
+                    if self.ws_manager.is_alive():
+                        logger.debug("Waiting for WebSocket thread to stop...")
+                        self.ws_manager.join(timeout=5.0)
+                        
+                        # Force terminate if still alive
+                        if self.ws_manager.is_alive():
+                            logger.warning("WebSocket thread did not stop gracefully, forcing termination")
+                            
+                except Exception as e:
+                    logger.warning(f"Error stopping WebSocket manager: {e}")
+                finally:
+                    self.ws_manager = None
+            
+            logger.info("Successfully disconnected from HyperLiquid WebSocket")
             
         except Exception as e:
             logger.error(f"Error during WebSocket disconnection: {e}")
+            # Ensure we're marked as disconnected even if there's an error
+            self.connected = False
+            self._main_loop = None
     
     def add_message_handler(self, subscription_type: str, handler: Callable) -> None:
         """
@@ -280,31 +304,43 @@ class HyperLiquidIntegration:
             message: Message to pass to the handler
             handler_type: Type of handler for logging purposes
         """
+        # Quick exit if not connected - prevents endless warnings during shutdown
+        if not self.connected:
+            return
+            
         try:
             # Check if we have a valid main loop reference
             if not hasattr(self, '_main_loop') or not self._main_loop:
-                logger.warning(f"Could not schedule async {handler_type} handler: no main loop stored")
+                # Only log this during normal operation, not shutdown
+                if self.connected:
+                    logger.warning(f"Could not schedule async {handler_type} handler: no main loop stored")
                 return
             
             # Check if the loop is still running and not closed
             if self._main_loop.is_closed():
-                logger.warning(f"Could not schedule async {handler_type} handler: main loop is closed")
+                # Only log this during normal operation, not shutdown
+                if self.connected:
+                    logger.warning(f"Could not schedule async {handler_type} handler: main loop is closed")
                 return
             
             # Try to schedule the handler
             future = asyncio.run_coroutine_threadsafe(handler(message), self._main_loop)
             
-            # Optional: Add a done callback to handle any exceptions
+            # Add a done callback to handle any exceptions
             def handle_result(fut):
                 try:
                     fut.result()  # This will raise any exception that occurred
                 except Exception as e:
-                    logger.error(f"Exception in async {handler_type} handler: {e}")
+                    # Only log errors if we're still connected
+                    if self.connected:
+                        logger.error(f"Exception in async {handler_type} handler: {e}")
             
             future.add_done_callback(handle_result)
             
         except Exception as e:
-            logger.warning(f"Could not schedule async {handler_type} handler: {e}")
+            # Only log warnings if we're still connected 
+            if self.connected:
+                logger.warning(f"Could not schedule async {handler_type} handler: {e}")
     
     async def subscribe_all_mids(self, handler: Optional[Callable] = None) -> bool:
         """
@@ -453,6 +489,10 @@ class HyperLiquidIntegration:
     
     def _handle_all_mids_message(self, message: Dict[str, Any]) -> None:
         """Handle all mids price update messages."""
+        # Skip processing if not connected (during shutdown)
+        if not self.connected:
+            return
+            
         try:
             # Call registered handlers
             for handler in self.message_handlers.get('allMids', []):
@@ -464,13 +504,19 @@ class HyperLiquidIntegration:
                     else:
                         handler(message)
                 except Exception as e:
-                    logger.error(f"Error in all mids message handler: {e}")
+                    if self.connected:  # Only log if still connected
+                        logger.error(f"Error in all mids message handler: {e}")
                     
         except Exception as e:
-            logger.error(f"Error handling all mids message: {e}")
+            if self.connected:  # Only log if still connected
+                logger.error(f"Error handling all mids message: {e}")
     
     def _handle_orderbook_message(self, message: Dict[str, Any]) -> None:
         """Handle order book update messages."""
+        # Skip processing if not connected (during shutdown)
+        if not self.connected:
+            return
+            
         try:
             # Extract symbol from message
             data = message.get('data', {})
@@ -485,10 +531,12 @@ class HyperLiquidIntegration:
                     else:
                         handler(message)
                 except Exception as e:
-                    logger.error(f"Error in order book message handler: {e}")
+                    if self.connected:  # Only log if still connected
+                        logger.error(f"Error in order book message handler: {e}")
                     
         except Exception as e:
-            logger.error(f"Error handling order book message: {e}")
+            if self.connected:  # Only log if still connected
+                logger.error(f"Error handling order book message: {e}")
     
     def _handle_trades_message(self, message: Dict[str, Any]) -> None:
         """
@@ -497,6 +545,10 @@ class HyperLiquidIntegration:
         Args:
             message: WebSocket message containing trade data
         """
+        # Skip processing if not connected (during shutdown)
+        if not self.connected:
+            return
+            
         try:
             # Call all registered handlers for trades
             for handler in self.message_handlers.get('trades', []):
@@ -508,9 +560,11 @@ class HyperLiquidIntegration:
                     else:
                         handler(message)
                 except Exception as e:
-                    logger.error(f"Error in trades message handler: {e}")
+                    if self.connected:  # Only log if still connected
+                        logger.error(f"Error in trades message handler: {e}")
         except Exception as e:
-            logger.error(f"Error handling trades message: {e}")
+            if self.connected:  # Only log if still connected
+                logger.error(f"Error handling trades message: {e}")
 
     def _handle_candle_message(self, message: Dict[str, Any]) -> None:
         """
@@ -519,6 +573,10 @@ class HyperLiquidIntegration:
         Args:
             message: WebSocket message containing candle data
         """
+        # Skip processing if not connected (during shutdown)
+        if not self.connected:
+            return
+            
         try:
             # Call all registered handlers for candles
             for handler in self.message_handlers.get('candle', []):
@@ -530,10 +588,12 @@ class HyperLiquidIntegration:
                     else:
                         handler(message)
                 except Exception as e:
-                    logger.error(f"Error in candles message handler: {e}")
+                    if self.connected:  # Only log if still connected
+                        logger.error(f"Error in candles message handler: {e}")
                     
         except Exception as e:
-            logger.error(f"Error handling candles message: {e}")
+            if self.connected:  # Only log if still connected
+                logger.error(f"Error handling candles message: {e}")
     
     # REST API Methods using official SDK
     

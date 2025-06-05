@@ -1,19 +1,8 @@
 """
-Bistoury Data Models Package
+Bistoury Models Package
 
-This package contains all Pydantic models for market data validation, 
-API responses, trading operations, and database entities.
-
-Core model categories:
-- market_data: Candlesticks, tickers, symbol information, timeframes
-- orderbook: Order book levels, snapshots, and analytics
-- trades: Individual trade executions and aggregated analytics
-- api_responses: HyperLiquid API response models
-- websocket: WebSocket message models for real-time data
-- trading: Positions, orders, portfolio state, and trading operations
-- signals: Trading signals, patterns, and signal aggregation
-- strategies: Strategy outputs, performance tracking, and backtesting
-- database: Database-optimized models (coming soon)
+Comprehensive data models for the Bistoury cryptocurrency trading system.
+Includes market data, trading operations, signals, and database optimization.
 """
 
 from .market_data import (
@@ -21,159 +10,119 @@ from .market_data import (
     Ticker,
     SymbolInfo,
     MarketData,
-    Timeframe,
     PriceLevel,
+    Timeframe
 )
 
-from .orderbook import (
-    OrderBookLevel,
-    OrderBook,
-    OrderBookSnapshot,
-    OrderBookDelta,
+from .signals import (
+    TradingSignal,
+    CandlestickPattern,
+    AnalysisContext,
+    SignalAggregation,
+    SignalDirection,
+    SignalType,
+    ConfidenceLevel,
+    PatternType
 )
 
-from .trades import (
-    Trade,
-    TradeAggregation,
-    TradeAnalytics,
-)
-
-from .api_responses import (
-    ErrorResponse,
-    ResponseMetadata,
-    MetadataResponse,
-    AllMidsResponse,
-    PositionInfo,
-    UserInfoResponse,
-    CandleHistoryResponse,
-    TradeHistoryResponse,
-    OrderBookResponse,
-    ResponseWrapper,
-)
-
-from .websocket import (
-    MessageType,
-    SubscriptionChannel,
-    WSMessage,
-    PriceUpdateMessage,
-    TradeUpdateMessage,
-    OrderBookUpdateMessage,
-    CandleUpdateMessage,
-    SubscriptionMessage,
-    MessageRouter,
+from .strategies import (
+    StrategyOutput,
+    StrategyPerformance,
+    SignalPerformance,
+    StrategyMetadata,
+    BacktestResult
 )
 
 from .trading import (
+    Position,
+    Order,
+    TradeExecution,
+    PortfolioState,
+    RiskParameters,
     PositionSide,
     OrderType,
     OrderStatus,
     OrderSide,
     TimeInForce,
-    Position,
-    Order,
-    TradeExecution,
-    RiskParameters,
-    PortfolioState,
 )
 
-from .signals import (
-    SignalDirection,
-    SignalType,
-    ConfidenceLevel,
-    PatternType,
-    TradingSignal,
-    CandlestickPattern,
-    AnalysisContext,
-    SignalAggregation,
+from .database import (
+    DatabaseModel,
+    DBCandlestickData,
+    DBTradeData,
+    DBOrderBookSnapshot,
+    DBFundingRateData,
+    DBTradingSignal,
+    DBPosition,
+    DBBatchOperation,
+    DBArchiveRecord
 )
 
-from .strategies import (
-    StrategyType,
-    StrategyStatus,
-    RiskLevel,
-    PerformanceMetric,
-    StrategyOutput,
-    SignalPerformance,
-    StrategyPerformance,
-    StrategyMetadata,
-    BacktestResult,
+from .serialization import (
+    SerializationFormat,
+    CompressionLevel,
+    SerializationMetrics,
+    DatabaseSerializer,
+    ModelConverter,
+    BatchProcessor,
+    DataIntegrityValidator,
 )
 
 __all__ = [
     # Market Data Models
     "CandlestickData",
-    "Ticker", 
+    "Ticker",
     "SymbolInfo",
     "MarketData",
-    "Timeframe",
     "PriceLevel",
+    "Timeframe",
     
-    # Order Book Models
-    "OrderBookLevel",
-    "OrderBook", 
-    "OrderBookSnapshot",
-    "OrderBookDelta",
-    
-    # Trade Models
-    "Trade",
-    "TradeAggregation",
-    "TradeAnalytics",
-    
-    # API Response Models
-    "ErrorResponse",
-    "ResponseMetadata",
-    "MetadataResponse",
-    "AllMidsResponse",
-    "PositionInfo",
-    "UserInfoResponse",
-    "CandleHistoryResponse",
-    "TradeHistoryResponse",
-    "OrderBookResponse",
-    "ResponseWrapper",
-    
-    # WebSocket Models
-    "MessageType",
-    "SubscriptionChannel",
-    "WSMessage",
-    "PriceUpdateMessage",
-    "TradeUpdateMessage",
-    "OrderBookUpdateMessage",
-    "CandleUpdateMessage",
-    "SubscriptionMessage",
-    "MessageRouter",
+    # Signal and Strategy Models
+    "TradingSignal",
+    "CandlestickPattern",
+    "AnalysisContext",
+    "SignalAggregation",
+    "SignalDirection",
+    "SignalType",
+    "ConfidenceLevel",
+    "PatternType",
+    "StrategyOutput",
+    "StrategyPerformance",
+    "SignalPerformance",
+    "StrategyMetadata",
+    "BacktestResult",
     
     # Trading Models
+    "Position",
+    "Order",
+    "TradeExecution",
+    "PortfolioState",
+    "RiskParameters",
     "PositionSide",
     "OrderType",
     "OrderStatus",
     "OrderSide",
     "TimeInForce",
-    "Position",
-    "Order",
-    "TradeExecution",
-    "RiskParameters",
-    "PortfolioState",
     
-    # Signal Models
-    "SignalDirection",
-    "SignalType",
-    "ConfidenceLevel",
-    "PatternType",
-    "TradingSignal",
-    "CandlestickPattern",
-    "AnalysisContext",
-    "SignalAggregation",
+    # Database Models
+    "DatabaseModel",
+    "DBCandlestickData",
+    "DBTradeData",
+    "DBOrderBookSnapshot",
+    "DBFundingRateData",
+    "DBTradingSignal",
+    "DBPosition",
+    "DBBatchOperation",
+    "DBArchiveRecord",
     
-    # Strategy Models
-    "StrategyType",
-    "StrategyStatus",
-    "RiskLevel",
-    "PerformanceMetric",
-    "StrategyOutput",
-    "SignalPerformance",
-    "StrategyPerformance",
-    "StrategyMetadata",
-    "BacktestResult",
+    # Serialization and Database Utilities
+    "SerializationFormat",
+    "CompressionLevel",
+    "SerializationMetrics",
+    "DatabaseSerializer",
+    "ModelConverter",
+    "BatchProcessor",
+    "DataIntegrityValidator",
 ]
 
 __version__ = "1.0.0" 

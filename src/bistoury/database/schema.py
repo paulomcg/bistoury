@@ -33,6 +33,7 @@ class MarketDataSchema:
         self.create_trades_table()
         self.create_orderbook_snapshots_table()
         self.create_funding_rates_table()
+        self.create_batch_operations_table()
         self.create_indices()
         
         logger.debug("Market data schema created successfully")
@@ -186,6 +187,31 @@ class MarketDataSchema:
         
         logger.debug("Created funding_rates table")
         
+    def create_batch_operations_table(self) -> None:
+        """Create batch operations table for tracking data collection operations."""
+        sql = """
+        CREATE TABLE IF NOT EXISTS batch_operations (
+            id INTEGER PRIMARY KEY,
+            batch_id TEXT UNIQUE NOT NULL,
+            operation_type TEXT NOT NULL,
+            table_name TEXT NOT NULL,
+            record_count INTEGER NOT NULL,
+            start_time TIMESTAMP NOT NULL,
+            end_time TIMESTAMP,
+            status TEXT,
+            error_message TEXT,
+            metrics_json TEXT,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+        """
+        self.db_manager.execute(sql)
+        
+        # Create sequence for batch operations
+        seq_sql = "CREATE SEQUENCE IF NOT EXISTS batch_operations_seq START 1"
+        self.db_manager.execute(seq_sql)
+        
+        logger.debug("Created batch_operations table")
+        
     def create_indices(self) -> None:
         """Create performance indices on frequently queried columns."""
         indices = [
@@ -205,6 +231,11 @@ class MarketDataSchema:
             # Funding rates indices
             "CREATE INDEX IF NOT EXISTS idx_funding_symbol_timestamp ON funding_rates(symbol, timestamp)",
             "CREATE INDEX IF NOT EXISTS idx_funding_timestamp ON funding_rates(timestamp)",
+            
+            # Batch operations indices
+            "CREATE INDEX IF NOT EXISTS idx_batch_operations_table ON batch_operations(table_name)",
+            "CREATE INDEX IF NOT EXISTS idx_batch_operations_status ON batch_operations(status)",
+            "CREATE INDEX IF NOT EXISTS idx_batch_operations_start_time ON batch_operations(start_time)",
         ]
         
         # Create indices for all candlestick tables
@@ -226,6 +257,7 @@ class MarketDataSchema:
     def drop_all_tables(self) -> None:
         """Drop all tables for clean recreation."""
         tables = [
+            'batch_operations',
             'orderbook_snapshots',
             'funding_rates',
             'trades',
@@ -244,7 +276,8 @@ class MarketDataSchema:
         # Drop sequences
         sequences = [
             'symbol_seq', 'candle_seq', 'trade_seq', 
-            'orderbook_snapshots_seq', 'funding_rates_seq'
+            'orderbook_snapshots_seq', 'funding_rates_seq',
+            'batch_operations_seq'
         ]
         
         for seq in sequences:
@@ -294,7 +327,7 @@ class MarketDataSchema:
         """Validate that all required tables and indices exist."""
         required_tables = [
             'symbols', 'trades', 'orderbook_snapshots', 'funding_rates',
-            'candles_1m', 'candles_5m', 'candles_15m', 
+            'batch_operations', 'candles_1m', 'candles_5m', 'candles_15m', 
             'candles_1h', 'candles_4h', 'candles_1d'
         ]
         

@@ -12,6 +12,7 @@ from . import __version__
 from .config import Config
 from .logger import get_logger
 from .database.connection import initialize_database, get_database_manager, shutdown_database
+from .cli_commands.collector import collect  # Import the new collector CLI module
 
 
 @click.group()
@@ -58,10 +59,15 @@ def main(ctx: click.Context, config: Optional[Path], verbose: bool) -> None:
     # Initialize database
     try:
         initialize_database(ctx.obj["config"])
-        click.echo("Database initialized successfully", err=True)
+        if verbose:
+            click.echo("Database initialized successfully", err=True)
     except Exception as e:
         click.echo(f"Database initialization failed: {e}", err=True)
         sys.exit(1)
+
+
+# Add the collector command group
+main.add_command(collect)
 
 
 @main.command()
@@ -133,44 +139,6 @@ def status(ctx: click.Context) -> None:
 
 @main.command()
 @click.option(
-    "--pairs",
-    "-p",
-    help="Trading pairs to collect data for (comma-separated)"
-)
-@click.option(
-    "--mode",
-    "-m",
-    type=click.Choice(["continuous", "once"]),
-    default="continuous",
-    help="Data collection mode"
-)
-@click.pass_context
-def collect(ctx: click.Context, pairs: Optional[str], mode: str) -> None:
-    """Start collecting market data from HyperLiquid."""
-    config: Config = ctx.obj["config"]
-    logger = ctx.obj["logger"]
-    
-    # Parse pairs
-    if pairs:
-        pair_list = [p.strip().upper() for p in pairs.split(",")]
-    else:
-        pair_list = config.data.default_pairs
-    
-    click.echo(f"🔄 Starting data collection for: {', '.join(pair_list)}")
-    click.echo(f"📈 Mode: {mode}")
-    
-    if not config.hyperliquid:
-        click.echo("❌ Error: HyperLiquid API not configured", err=True)
-        sys.exit(1)
-    
-    logger.info(f"Data collection started for pairs: {pair_list}, mode: {mode}")
-    
-    # TODO: Implement actual data collection
-    click.echo("⚠️  Data collection not yet implemented")
-
-
-@main.command()
-@click.option(
     "--mode",
     "-m",
     type=click.Choice(["historical", "live"]),
@@ -216,34 +184,34 @@ def trade(ctx: click.Context, confirm: bool, risk_limit: Optional[float]) -> Non
     config: Config = ctx.obj["config"]
     logger = ctx.obj["logger"]
     
+    # Safety checks
+    if config.trading.mode != "live":
+        click.echo("❌ Live trading requires trading.mode = 'live' in configuration", err=True)
+        sys.exit(1)
+    
     if not confirm:
-        click.echo("❌ Live trading requires --confirm flag", err=True)
-        click.echo("⚠️  This will trade with REAL MONEY. Use at your own risk!")
+        click.echo("🚨 DANGER: This will trade with REAL MONEY!")
+        click.echo("Use --confirm to acknowledge the risk")
         sys.exit(1)
     
-    if not config.hyperliquid:
-        click.echo("❌ Error: HyperLiquid API not configured", err=True)
-        sys.exit(1)
-    
-    if not config.validate_llm_keys():
-        click.echo("❌ Error: No LLM API keys configured", err=True)
-        sys.exit(1)
-    
-    effective_risk_limit = risk_limit or config.trading.risk_limit_usd
-    
-    click.echo("🚨 LIVE TRADING MODE ACTIVATED")
-    click.echo("=" * 40)
-    click.echo(f"💰 Risk Limit: ${effective_risk_limit}")
-    click.echo(f"🎯 Max Positions: {config.trading.max_positions}")
-    click.echo(f"📊 Trading Pairs: {', '.join(config.data.default_pairs)}")
-    click.echo("⚠️  YOU ARE TRADING WITH REAL MONEY!")
-    
-    # Final confirmation
-    if not click.confirm("Are you absolutely sure you want to proceed?"):
-        click.echo("Trading cancelled.")
+    # Additional confirmation
+    click.echo("🚨 FINAL WARNING: You are about to start live trading!")
+    click.echo("This system will execute trades using real money.")
+    if not click.confirm("Are you absolutely sure you want to continue?"):
+        click.echo("Live trading cancelled.")
         sys.exit(0)
     
-    logger.warning(f"Live trading started with risk limit: ${effective_risk_limit}")
+    try:
+        config.validate_for_trading()
+    except ValueError as e:
+        click.echo(f"❌ Trading validation failed: {e}", err=True)
+        sys.exit(1)
+    
+    click.echo(f"💰 Starting live trading")
+    if risk_limit:
+        click.echo(f"💵 Risk limit: ${risk_limit:,.2f}")
+    
+    logger.warning(f"Live trading started with risk limit: {risk_limit}")
     
     # TODO: Implement live trading
     click.echo("⚠️  Live trading not yet implemented")
@@ -252,75 +220,69 @@ def trade(ctx: click.Context, confirm: bool, risk_limit: Optional[float]) -> Non
 @main.command()
 @click.pass_context
 def init(ctx: click.Context) -> None:
-    """Initialize Bistoury configuration and data directories."""
+    """Initialize Bistoury for first-time use."""
     config: Config = ctx.obj["config"]
     logger = ctx.obj["logger"]
     
     click.echo("🚀 Initializing Bistoury...")
     
-    # Create directories
-    directories = [
-        Path(config.database.path).parent,
-        Path(config.database.backup_path),
-        Path(config.logging.file_path).parent,
-        Path("data"),
-        Path("logs"),
-        Path("backups")
-    ]
+    # Check if already initialized
+    try:
+        db_manager = get_database_manager()
+        click.echo("✅ Database connection established")
+        
+        # TODO: Add more initialization checks
+        click.echo("✅ Bistoury appears to be already initialized")
+        click.echo("\nNext steps:")
+        click.echo("• Run 'bistoury status' to check system status")
+        click.echo("• Run 'bistoury collect start' to begin data collection")
+        click.echo("• Run 'bistoury paper-trade' to test trading strategies")
+        
+    except Exception as e:
+        click.echo(f"❌ Initialization failed: {e}", err=True)
+        sys.exit(1)
     
-    for directory in directories:
-        directory.mkdir(parents=True, exist_ok=True)
-        click.echo(f"📁 Created directory: {directory}")
-    
-    # Check configuration
-    if not config.validate_llm_keys():
-        click.echo("⚠️  Warning: No LLM API keys found in environment")
-        click.echo("   Please configure at least one LLM provider in your .env file")
-    
-    if not config.hyperliquid:
-        click.echo("⚠️  Warning: HyperLiquid API not configured")
-        click.echo("   Please add HYPERLIQUID_API_KEY and HYPERLIQUID_SECRET_KEY to .env")
-    
-    click.echo("✅ Initialization complete!")
-    logger.info("Bistoury initialization completed")
+    logger.info("Initialization completed")
 
 
 @main.command()
 @click.pass_context
 def db_status(ctx: click.Context) -> None:
     """Show detailed database status and statistics."""
+    config: Config = ctx.obj["config"]
+    logger = ctx.obj["logger"]
+    
     try:
         db_manager = get_database_manager()
         db_info = db_manager.get_database_info()
         
-        click.echo("📊 Database Status Details")
+        click.echo("🗄️ Database Status")
         click.echo("=" * 30)
         
-        for key, value in db_info.items():
-            click.echo(f"{key.replace('_', ' ').title()}: {value}")
-            
-        # Test query
-        click.echo("\n🧪 Testing database connection...")
-        result = db_manager.execute("SELECT 'Database connection OK' as status")
-        click.echo(f"✅ {result[0][0]}")
+        click.echo(f"Path: {db_info.get('database_path', 'Unknown')}")
+        click.echo(f"Size: {db_info.get('database_size', 'Unknown')}")
+        click.echo(f"Active Connections: {db_info.get('active_connections', 'Unknown')}")
+        click.echo(f"Max Connections: {db_info.get('max_connections', 'Unknown')}")
+        
+        # TODO: Add table statistics
         
     except Exception as e:
-        click.echo(f"❌ Database error: {e}")
+        click.echo(f"❌ Database status check failed: {e}", err=True)
         sys.exit(1)
+    
+    logger.info("Database status checked")
 
 
 def shutdown():
-    """Cleanup function called on exit."""
+    """Clean shutdown of the CLI."""
     try:
         shutdown_database()
     except Exception:
-        pass  # Ignore errors during shutdown
-
-
-# Register cleanup
-import atexit
-atexit.register(shutdown)
+        pass  # Ignore shutdown errors
 
 
 if __name__ == "__main__":
-    main() 
+    try:
+        main()
+    finally:
+        shutdown() 

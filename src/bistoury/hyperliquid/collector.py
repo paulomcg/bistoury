@@ -213,6 +213,15 @@ class EnhancedDataCollector:
         # Clear subscriptions
         self.active_subscriptions.clear()
         
+        # Disconnect from HyperLiquid WebSocket to stop message handlers
+        try:
+            if self.hyperliquid.is_connected():
+                logger.info("Disconnecting from HyperLiquid WebSocket...")
+                await self.hyperliquid.disconnect()
+                logger.debug("HyperLiquid disconnection completed")
+        except Exception as e:
+            logger.warning(f"Error during HyperLiquid disconnection: {e}")
+        
         logger.info("Enhanced DataCollector stopped gracefully")
     
     async def _discover_symbols(self) -> None:
@@ -329,7 +338,7 @@ class EnhancedDataCollector:
                     record_count INTEGER NOT NULL,
                     start_time TIMESTAMP NOT NULL,
                     end_time TIMESTAMP,
-                    status TEXT DEFAULT 'running',
+                    status TEXT,
                     error_message TEXT,
                     metrics_json TEXT
                 )
