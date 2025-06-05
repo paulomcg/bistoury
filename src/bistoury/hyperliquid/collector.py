@@ -394,7 +394,7 @@ class EnhancedDataCollector:
             success = await self.hyperliquid.subscribe_all_mids(self._handle_enhanced_price_update)
             if success:
                 self.active_subscriptions.add('allMids')
-                logger.info("Subscribed to enhanced all mid prices")
+                logger.debug("Subscribed to enhanced all mid prices")
             
             # Subscribe to individual symbol feeds with limits
             symbol_list = list(self.config.symbols)[:max_subscriptions]
@@ -422,7 +422,7 @@ class EnhancedDataCollector:
                     if candle_success:
                         self.active_subscriptions.add(f'candle_{symbol}_{interval}')
                         subscription_count += 1
-                        logger.info(f"Subscribed to {interval} candles for {symbol}")
+                        logger.debug(f"Subscribed to {interval} candles for {symbol}")
                 
                 # Subscribe to order book for key symbols only
                 if symbol in self.config.orderbook_symbols and subscription_count < max_subscriptions:
@@ -475,7 +475,7 @@ class EnhancedDataCollector:
     async def _handle_enhanced_trade_update(self, message: Dict[str, Any]) -> None:
         """Handle enhanced trade updates with database models."""
         try:
-            logger.info(f"💹 Received trade message: {json.dumps(message, indent=2)}")
+            logger.debug(f"💹 Received trade message: {json.dumps(message, indent=2)}")
             
             data = message.get('data', [])
             
@@ -484,11 +484,11 @@ class EnhancedDataCollector:
                 
                 for trade_data in data:
                     try:
-                        logger.info(f"🔄 Processing trade data: {trade_data}")
+                        logger.debug(f"🔄 Processing trade data: {trade_data}")
                         
                         symbol = trade_data.get('coin', '')
                         
-                        logger.info(f"🎯 Trade symbol: {symbol}")
+                        logger.debug(f"🎯 Trade symbol: {symbol}")
                         
                         # Only process trades for symbols we're interested in
                         if symbol not in self.config.symbols:
@@ -511,7 +511,7 @@ class EnhancedDataCollector:
                         user1 = trade_data.get('user1', None)  
                         user2 = trade_data.get('user2', None)
                         
-                        logger.info(f"💰 Trade - Price: {trade_data.get('px')}, Size: {trade_data.get('sz')}, Side: {side}")
+                        logger.debug(f"💰 Trade - Price: {trade_data.get('px')}, Size: {trade_data.get('sz')}, Side: {side}")
                         
                         db_trade = DBTradeData(
                             symbol=symbol,
@@ -525,7 +525,7 @@ class EnhancedDataCollector:
                             user2=user2
                         )
                         
-                        logger.info(f"✅ Created trade model for {symbol}")
+                        logger.debug(f"✅ Created trade model for {symbol}")
                         
                         # Validate if enabled
                         if self.config.enable_validation:
@@ -536,7 +536,7 @@ class EnhancedDataCollector:
                         self.trade_buffer.append(db_trade)
                         self.stats.trades_collected += 1
                         
-                        logger.info(f"📈 Added trade to buffer. Total in buffer: {len(self.trade_buffer)}")
+                        logger.debug(f"📈 Added trade to buffer. Total in buffer: {len(self.trade_buffer)}")
                         
                     except Exception as e:
                         logger.warning(f"Failed to process trade data: {e}")
@@ -598,7 +598,7 @@ class EnhancedDataCollector:
     async def _handle_enhanced_candle_update(self, message: Dict[str, Any]) -> None:
         """Handle enhanced candle/kline updates from WebSocket."""
         try:
-            logger.info(f"🕯️ Received candle message: {json.dumps(message, indent=2)}")
+            logger.debug(f"🕯️ Received candle message: {json.dumps(message, indent=2)}")
             
             data = message.get('data', {})
             
@@ -607,13 +607,13 @@ class EnhancedDataCollector:
                 timestamp = datetime.now(timezone.utc)
                 
                 try:
-                    logger.info(f"📊 Processing candle data: {data}")
+                    logger.debug(f"📊 Processing candle data: {data}")
                     
                     # Extract raw HyperLiquid candle fields based on API documentation
                     symbol = data.get('s', '')  # coin symbol
                     interval = data.get('i', '')  # interval
                     
-                    logger.info(f"🎯 Symbol: {symbol}, Interval: {interval}")
+                    logger.debug(f"🎯 Symbol: {symbol}, Interval: {interval}")
                     
                     # Only process candles for symbols and intervals we're interested in
                     if symbol not in self.config.symbols or interval not in self.config.intervals:
@@ -631,7 +631,7 @@ class EnhancedDataCollector:
                     volume = str(data.get('v', '0'))      # volume (base unit)
                     trade_count = data.get('n', 0)        # number of trades
                     
-                    logger.info(f"💰 Prices - O:{open_price} H:{high_price} L:{low_price} C:{close_price} V:{volume}")
+                    logger.debug(f"💰 Prices - O:{open_price} H:{high_price} L:{low_price} C:{close_price} V:{volume}")
                     
                     # Convert timestamp from milliseconds to datetime
                     candle_timestamp = datetime.fromtimestamp(open_time / 1000, tz=timezone.utc)
@@ -649,7 +649,7 @@ class EnhancedDataCollector:
                         trade_count=trade_count
                     )
                     
-                    logger.info(f"✅ Created candle model for {symbol} {interval}")
+                    logger.debug(f"✅ Created candle model for {symbol} {interval}")
                     
                     # Validate if enabled
                     if self.config.enable_validation:
@@ -662,7 +662,7 @@ class EnhancedDataCollector:
                     self.candle_buffer.append((db_candle, interval))
                     self.stats.candles_collected += 1
                     
-                    logger.info(f"📈 Added candle to buffer. Total in buffer: {len(self.candle_buffer)}")
+                    logger.debug(f"📈 Added candle to buffer. Total in buffer: {len(self.candle_buffer)}")
                     
                 except Exception as e:
                     logger.warning(f"Failed to process candle data: {e}")
@@ -872,7 +872,8 @@ class EnhancedDataCollector:
             self.batch_operations[batch_id] = batch_op
             self.stats.batches_processed += 1
             
-            logger.debug(f"Enhanced flush: {len(self.orderbook_buffer)} orderbook records to database")
+            stored_count = len(self.orderbook_buffer)
+            logger.info(f"✅ Flushed {stored_count} orderbook snapshots to orderbook_snapshots")
             self.orderbook_buffer.clear()
             
         except Exception as e:

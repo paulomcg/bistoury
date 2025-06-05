@@ -12,7 +12,9 @@ import logging
 import json
 from decimal import Decimal, InvalidOperation
 
-logger = logging.getLogger(__name__)
+from ..logger import get_logger
+
+logger = get_logger(__name__)
 
 class MarketDataSchema:
     """Manages database schema for market data storage."""
@@ -23,7 +25,7 @@ class MarketDataSchema:
         
     def create_all_tables(self) -> None:
         """Create all market data tables in the correct order."""
-        logger.info("Creating market data schema...")
+        logger.debug("Creating market data schema...")
         
         # Create tables in dependency order
         self.create_symbols_table()
@@ -33,7 +35,7 @@ class MarketDataSchema:
         self.create_funding_rates_table()
         self.create_indices()
         
-        logger.info("Market data schema created successfully")
+        logger.debug("Market data schema created successfully")
         
     def create_symbols_table(self) -> None:
         """Create symbols metadata table."""
@@ -56,7 +58,7 @@ class MarketDataSchema:
         seq_sql = "CREATE SEQUENCE IF NOT EXISTS symbols_seq START 1"
         self.db_manager.execute(seq_sql)
         
-        logger.info("Created symbols table")
+        logger.debug("Created symbols table")
         
     def create_candles_tables(self) -> None:
         """Create candlestick tables for different timeframes."""
@@ -91,7 +93,7 @@ class MarketDataSchema:
             seq_sql = f"CREATE SEQUENCE IF NOT EXISTS {table_name}_seq START 1"
             self.db_manager.execute(seq_sql)
             
-            logger.info(f"Created {table_name} table")
+            logger.debug(f"Created {table_name} table")
             
     def create_trades_table(self) -> None:
         """Create trades table for individual trade records."""
@@ -116,7 +118,7 @@ class MarketDataSchema:
         seq_sql = "CREATE SEQUENCE IF NOT EXISTS trades_seq START 1"
         self.db_manager.execute(seq_sql)
         
-        logger.info("Created trades table")
+        logger.debug("Created trades table")
         
     def create_orderbook_snapshots_table(self) -> None:
         """Create orderbook snapshots table."""
@@ -149,7 +151,7 @@ class MarketDataSchema:
         # Create sequence for funding rates
         self.db_manager.execute("CREATE SEQUENCE IF NOT EXISTS funding_rates_seq START 1")
         
-        logger.info("Created orderbook_snapshots table")
+        logger.debug("Created orderbook_snapshots table")
         
     def create_funding_rates_table(self) -> None:
         """Create funding rates table for perpetual contracts."""
@@ -179,7 +181,7 @@ class MarketDataSchema:
         self.db_manager.execute("CREATE INDEX IF NOT EXISTS idx_funding_symbol_time ON funding_rates(symbol, timestamp)")
         self.db_manager.execute("CREATE INDEX IF NOT EXISTS idx_funding_time_ms ON funding_rates(time_ms)")
         
-        logger.info("Created funding_rates table")
+        logger.debug("Created funding_rates table")
         
     def create_indices(self) -> None:
         """Create performance indices on frequently queried columns."""
@@ -216,7 +218,7 @@ class MarketDataSchema:
         for sql in indices:
             self.db_manager.execute(sql)
             
-        logger.info("Created performance indices")
+        logger.debug("Created performance indices")
         
     def drop_all_tables(self) -> None:
         """Drop all tables for clean recreation."""
@@ -232,7 +234,7 @@ class MarketDataSchema:
         for table in tables:
             try:
                 self.db_manager.execute(f"DROP TABLE IF EXISTS {table}")
-                logger.info(f"Dropped table: {table}")
+                logger.debug(f"Dropped table: {table}")
             except Exception as e:
                 logger.warning(f"Could not drop table {table}: {e}")
                 
@@ -245,37 +247,37 @@ class MarketDataSchema:
         for seq in sequences:
             try:
                 self.db_manager.execute(f"DROP SEQUENCE IF EXISTS {seq}")
-                logger.info(f"Dropped sequence: {seq}")
+                logger.debug(f"Dropped sequence: {seq}")
             except Exception as e:
                 logger.warning(f"Could not drop sequence {seq}: {e}")
                 
     def recreate_all_tables(self) -> None:
         """Drop and recreate all tables with fresh schema."""
-        logger.info("Recreating all tables with fresh schema...")
+        logger.debug("Recreating all tables with fresh schema...")
         self.drop_all_tables()
         self.create_all_tables()
-        logger.info("All tables recreated successfully")
+        logger.debug("All tables recreated successfully")
         
-    def get_schema_info(self) -> Dict:
-        """Get information about the current schema."""
-        tables_info = {}
+    def get_schema_debug(self) -> Dict:
+        """Get debugrmation about the current schema."""
+        tables_debug = {}
         
         # Get list of tables
         tables_result = self.db_manager.execute(
-            "SELECT table_name FROM information_schema.tables WHERE table_schema = 'main'"
+            "SELECT table_name FROM debugrmation_schema.tables WHERE table_schema = 'main'"
         )
         
         for (table_name,) in tables_result:
-            # Get column info for each table
+            # Get column debug for each table
             columns_result = self.db_manager.execute(
                 f"DESCRIBE {table_name}"
             )
-            tables_info[table_name] = {
+            tables_debug[table_name] = {
                 'columns': columns_result,
                 'row_count': self._get_table_row_count(table_name)
             }
             
-        return tables_info
+        return tables_debug
         
     def _get_table_row_count(self, table_name: str) -> int:
         """Get row count for a table."""
@@ -294,7 +296,7 @@ class MarketDataSchema:
         ]
         
         existing_tables_result = self.db_manager.execute(
-            "SELECT table_name FROM information_schema.tables WHERE table_schema = 'main'"
+            "SELECT table_name FROM debugrmation_schema.tables WHERE table_schema = 'main'"
         )
         existing_tables = {row[0] for row in existing_tables_result}
         
@@ -304,7 +306,7 @@ class MarketDataSchema:
             logger.error(f"Missing required tables: {missing_tables}")
             return False
             
-        logger.info("Schema validation passed")
+        logger.debug("Schema validation passed")
         return True
 
 
