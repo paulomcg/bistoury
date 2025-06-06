@@ -399,7 +399,6 @@ class BaseAgent(ABC):
             
             # Calculate health score
             self.health.health_score = self._calculate_health_score()
-            self.health.is_healthy = self.health.health_score > 0.5
             
             return self.health
             
@@ -408,7 +407,6 @@ class BaseAgent(ABC):
             self.health.last_error = str(e)
             self.health.last_error_time = datetime.now(timezone.utc)
             self.health.error_count += 1
-            self.health.is_healthy = False
             return self.health
     
     def _calculate_health_score(self) -> float:

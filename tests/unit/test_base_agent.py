@@ -104,7 +104,7 @@ class TestAgentHealth:
         assert health.memory_usage == 2048
         assert health.error_count == 0
         assert health.messages_processed == 1000
-        assert health.is_healthy is True
+        assert health.is_healthy() is True
         assert health.health_score == 1.0
 
 
@@ -344,7 +344,7 @@ class TestBaseAgent:
         # Test normal health
         health = await agent.get_health()
         assert health.health_score == 1.0
-        assert health.is_healthy is True
+        assert health.is_healthy() is True
         
         # Simulate errors
         agent.health.error_count = 3
