@@ -53,6 +53,15 @@ class ConfidenceLevel(str, Enum):
     VERY_HIGH = "very_high"    # 80-100%
 
 
+class RiskLevel(str, Enum):
+    """Risk level enumeration for trading signals."""
+    VERY_LOW = "very_low"
+    LOW = "low" 
+    MEDIUM = "medium"
+    HIGH = "high"
+    VERY_HIGH = "very_high"
+
+
 class PatternType(str, Enum):
     """Candlestick pattern type enumeration."""
     # Single candle patterns
