@@ -300,7 +300,7 @@ class MarketDataSchema:
         
         # Get list of tables
         tables_result = self.db_manager.execute(
-            "SELECT table_name FROM debugrmation_schema.tables WHERE table_schema = 'main'"
+            "SELECT table_name FROM information_schema.tables WHERE table_schema = 'main'"
         )
         
         for (table_name,) in tables_result:
@@ -332,7 +332,7 @@ class MarketDataSchema:
         ]
         
         existing_tables_result = self.db_manager.execute(
-            "SELECT table_name FROM debugrmation_schema.tables WHERE table_schema = 'main'"
+            "SELECT table_name FROM information_schema.tables WHERE table_schema = 'main'"
         )
         existing_tables = {row[0] for row in existing_tables_result}
         
@@ -466,13 +466,16 @@ class DataInsertion:
             # Insert new candle
             sql = f"""
             INSERT INTO {table_name}
-            (id, symbol, timestamp_start, timestamp_end, open_price, close_price, 
-             high_price, low_price, volume, trade_count)
-            VALUES (nextval('{table_name}_seq'), ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            (id, symbol, interval, open_time_ms, close_time_ms, timestamp_start, timestamp_end, 
+             open_price, close_price, high_price, low_price, volume, trade_count)
+            VALUES (nextval('{table_name}_seq'), ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """
             
             values = (
                 candle_data['s'],  # symbol
+                timeframe,  # interval
+                candle_data['t'],  # open_time_ms
+                candle_data.get('T', candle_data['t']),  # close_time_ms
                 start_ts,
                 end_ts,
                 float(candle_data['o']),  # open

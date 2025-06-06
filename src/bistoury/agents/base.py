@@ -39,6 +39,7 @@ class AgentType(str, Enum):
     """Types of agents in the system."""
     COLLECTOR = "collector"
     SIGNAL_MANAGER = "signal_manager"
+    STRATEGY = "strategy"
     TRADER = "trader"
     POSITION_MANAGER = "position_manager"
     RISK_MANAGER = "risk_manager"
