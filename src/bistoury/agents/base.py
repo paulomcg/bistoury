@@ -88,7 +88,7 @@ class AgentHealth(BaseModel):
     state: AgentState
     last_heartbeat: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     cpu_usage: float = 0.0
-    memory_usage: int = 0
+    memory_usage: float = 0.0
     error_count: int = 0
     warning_count: int = 0
     
@@ -98,10 +98,13 @@ class AgentHealth(BaseModel):
     uptime_seconds: float = 0.0
     
     # Health indicators
-    is_healthy: bool = True
     health_score: float = 1.0  # 0.0 to 1.0
     last_error: Optional[str] = None
     last_error_time: Optional[datetime] = None
+    
+    def is_healthy(self) -> bool:
+        """Check if the agent is currently healthy."""
+        return self.health_score >= 0.5 and self.state not in (AgentState.ERROR, AgentState.CRASHED)
 
 
 class BaseAgent(ABC):
