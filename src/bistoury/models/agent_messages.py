@@ -120,6 +120,21 @@ class TradingSignalPayload(BaseModel):
     strategy: str = Field(..., description="Strategy that generated signal")
     reasoning: str = Field(..., description="Human-readable reasoning")
     metadata: Dict[str, Any] = Field(default_factory=dict, description="Additional metadata")
+    timestamp: Optional[datetime] = Field(None, description="Signal timestamp")
+
+
+class AggregatedSignalPayload(BaseModel):
+    """Payload for aggregated signal messages."""
+    model_config = ConfigDict(str_strip_whitespace=True)
+    
+    symbol: str = Field(..., description="Trading symbol")
+    direction: str = Field(..., description="Aggregated direction")
+    confidence: float = Field(..., ge=0.0, le=1.0, description="Aggregated confidence (0-1)")
+    strength: float = Field(..., ge=0.0, le=10.0, description="Aggregated strength (0-10)")
+    signal_count: int = Field(..., ge=1, description="Number of contributing signals")
+    contributing_strategies: List[str] = Field(..., description="List of contributing strategies")
+    timestamp: datetime = Field(..., description="Aggregation timestamp")
+    metadata: Dict[str, Any] = Field(default_factory=dict, description="Aggregation metadata")
 
 
 class TradingOrderPayload(BaseModel):
@@ -166,6 +181,7 @@ class SystemEventPayload(BaseModel):
 MessagePayload = Union[
     MarketDataPayload,
     TradingSignalPayload,
+    AggregatedSignalPayload,
     TradingOrderPayload,
     RiskEventPayload,
     SystemEventPayload,

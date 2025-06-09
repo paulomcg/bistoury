@@ -1387,28 +1387,6 @@
         },
         {
           "id": "9.5",
-          "title": "Phase 2 Evolution Framework",
-          "description": "Build foundation for evolution to temporal narrative management",
-          "status": "pending",
-          "details": {
-            "implementation": [
-              "Create TemporalAnalyzer interface for future narrative evolution tracking",
-              "Implement NarrativeEvolutionDetector for story continuity analysis",
-              "Add temporal weighting framework for time-aware signal processing",
-              "Create MetaNarrativeGenerator interface for future LLM integration",
-              "Implement A/B testing framework for mathematical vs narrative approaches",
-              "Add evolution metrics and ROI tracking for funding decisions"
-            ],
-            "testStrategy": "Test evolution framework interfaces, A/B testing capabilities, and ROI measurement",
-            "files": [
-              "src/bistoury/signal_manager/evolution_framework.py",
-              "tests/unit/test_evolution_framework.py"
-            ]
-          },
-          "dependencies": ["9.1", "9.2", "9.3", "9.4"]
-        },
-        {
-          "id": "9.6",
           "title": "Signal Manager Agent Integration",
           "description": "Integrate SignalManager into multi-agent framework with messaging",
           "status": "pending",
@@ -1427,7 +1405,7 @@
               "tests/unit/test_signal_manager_agent.py"
             ]
           },
-          "dependencies": ["9.1", "9.2", "9.3", "9.4", "9.5"]
+          "dependencies": ["9.1", "9.2", "9.3", "9.4"]
         }
       ]
     },
@@ -2158,6 +2136,36 @@
         ]
       },
       "dependencies": [],
+      "subtasks": []
+    },
+    {
+      "id": "26",
+      "title": "Phase 2 Evolution Framework (LLM Track)", 
+      "description": "Build foundation for evolution to temporal narrative management - Phase 2 LLM integration",
+      "status": "pending",
+      "priority": "low",
+      "details": {
+        "implementation": [
+          "Create TemporalAnalyzer interface for future narrative evolution tracking",
+          "Implement NarrativeEvolutionDetector for story continuity analysis", 
+          "Add temporal weighting framework for time-aware signal processing",
+          "Create MetaNarrativeGenerator interface for future LLM integration",
+          "Implement A/B testing framework for mathematical vs narrative approaches",
+          "Add evolution metrics and ROI tracking for funding decisions"
+        ],
+        "phase2Focus": [
+          "This task is part of the Phase 2 LLM track",
+          "Provides A/B testing between mathematical and narrative approaches",
+          "Foundation for future LLM-based narrative trading",
+          "Can be implemented after mathematical engine is proven"
+        ],
+        "testStrategy": "Test evolution framework interfaces, A/B testing capabilities, and ROI measurement",
+        "files": [
+          "src/bistoury/signal_manager/evolution_framework.py", 
+          "tests/unit/test_evolution_framework.py"
+        ]
+      },
+      "dependencies": [9, 12],
       "subtasks": []
     }
   ]
