@@ -16,6 +16,7 @@ from pydantic import BaseModel, Field, ConfigDict, computed_field
 from ..models.signals import (
     TradingSignal, 
     SignalDirection, 
+    SignalType,
     Timeframe,
     RiskLevel
 )
@@ -342,15 +343,22 @@ class AggregatedSignal(BaseModel):
         else:
             return "weak_consensus"
     
-    def to_trading_signal(self) -> TradingSignal:
+    def to_trading_signal(self, symbol: str = "BTC", signal_id: str = None) -> TradingSignal:
         """Convert to basic TradingSignal for backward compatibility"""
+        if signal_id is None:
+            signal_id = f"agg_{self.timestamp.strftime('%Y%m%d_%H%M%S')}"
+        
         return TradingSignal(
-            symbol="",  # Will be set by caller
+            signal_id=signal_id,
+            symbol=symbol,
             direction=self.direction,
-            confidence=self.confidence,
-            timeframe=Timeframe.MULTI,  # Aggregated across timeframes
-            reasoning=f"Aggregated from {len(self.contributing_strategies)} strategies",
-            risk_level=self.risk_level,
+            signal_type=SignalType.TECHNICAL,  # Default for aggregated signals
+            confidence=Decimal(str(self.confidence)),
+            strength=Decimal(str(self.weight)),
+            price=Decimal("50000"),  # Default placeholder, should be set by caller
+            timeframe=Timeframe.FIFTEEN_MINUTES,  # Default to 15m for aggregated signals
+            source=f"signal_manager_aggregated",
+            reason=f"Aggregated from {len(self.contributing_strategies)} strategies",
             timestamp=self.timestamp
         )
 

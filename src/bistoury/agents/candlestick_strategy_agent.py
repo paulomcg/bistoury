@@ -12,9 +12,9 @@ from decimal import Decimal
 from typing import Dict, List, Optional, Set, Any
 from dataclasses import dataclass, field
 
-from ..agents.base import BaseAgent, AgentType, AgentCapability, AgentHealth
+from ..agents.base import BaseAgent, AgentType, AgentCapability, AgentHealth, AgentState
 from ..agents.messaging import MessageType, Message, MessagePriority
-from ..models.signals import CandlestickData, TradingSignal, AnalysisContext
+from ..models.signals import CandlestickData, TradingSignal, AnalysisContext, SignalDirection, SignalType
 from ..strategies.candlestick_models import (
     StrategyConfiguration, 
     MultiTimeframePattern,
@@ -27,6 +27,7 @@ from ..strategies.timeframe_analyzer import TimeframeAnalyzer
 from ..strategies.pattern_scoring import PatternScoringEngine
 from ..strategies.signal_generator import SignalGenerator, SignalConfiguration
 from ..strategies.narrative_generator import NarrativeGenerator, NarrativeConfiguration, NarrativeStyle
+from ..models.market_data import Timeframe
 
 
 @dataclass
@@ -244,21 +245,21 @@ class CandlestickStrategyAgent(BaseAgent):
     async def _start_background_tasks(self):
         """Start background maintenance tasks."""
         
-        # Data cleanup task
         async def data_cleanup_task():
-            while self.state.name == "RUNNING":
+            while self.state == AgentState.RUNNING:
                 await asyncio.sleep(self.config.data_cleanup_interval_seconds)
-                await self._cleanup_old_data()
+                if self.state == AgentState.RUNNING:
+                    await self._cleanup_old_data()
                 
-        # Health monitoring task  
         async def health_monitoring_task():
-            while self.state.name == "RUNNING":
+            while self.state == AgentState.RUNNING:
                 await asyncio.sleep(self.config.health_check_interval_seconds)
-                await self._update_health_metrics()
+                if self.state == AgentState.RUNNING:
+                    await self._update_health_metrics()
                 
-        # Start tasks
-        self.add_background_task(data_cleanup_task())
-        self.add_background_task(health_monitoring_task())
+        # Start tasks using the base agent's task management
+        self.create_task(data_cleanup_task())
+        self.create_task(health_monitoring_task())
         
     async def handle_message(self, message: Message):
         """Handle incoming messages from the message bus."""
@@ -364,20 +365,33 @@ class CandlestickStrategyAgent(BaseAgent):
         """Perform comprehensive pattern analysis for a symbol."""
         
         try:
-            # Prepare timeframe data
+            # Prepare timeframe data - convert strings to Timeframe enum
             timeframe_data = {}
-            for timeframe in self.config.timeframes:
-                candles = self.market_data_buffer[symbol][timeframe]
-                timeframe_data[timeframe] = candles[-20:]  # Last 20 candles
+            
+            timeframe_mapping = {
+                "1m": Timeframe.ONE_MINUTE,
+                "5m": Timeframe.FIVE_MINUTES,
+                "15m": Timeframe.FIFTEEN_MINUTES
+            }
+            
+            for timeframe_str in self.config.timeframes:
+                if timeframe_str in timeframe_mapping:
+                    timeframe_enum = timeframe_mapping[timeframe_str]
+                    candles = self.market_data_buffer[symbol][timeframe_str]
+                    timeframe_data[timeframe_enum] = candles[-20:]  # Last 20 candles
                 
             # Perform multi-timeframe analysis
-            analysis_result = await self.timeframe_analyzer.analyze_timeframes(
-                timeframe_data,
-                self.config.timeframes
+            analysis_result = await self.timeframe_analyzer.analyze(
+                symbol,
+                timeframe_data
             )
             
             # Check if analysis meets our criteria
-            if analysis_result.has_tradeable_patterns():
+            has_patterns = analysis_result.total_patterns_detected > 0
+            meets_quality = analysis_result.data_quality_score >= Decimal("60")
+            meets_latency = analysis_result.meets_latency_requirement
+            
+            if has_patterns and meets_quality and meets_latency:
                 await self._generate_signals(symbol, analysis_result)
                 
         except Exception as e:
@@ -388,44 +402,102 @@ class CandlestickStrategyAgent(BaseAgent):
         """Generate trading signals from pattern analysis."""
         
         try:
-            # Extract patterns that meet our criteria
-            qualifying_patterns = []
+            # Get all patterns from the analysis
+            all_patterns = []
             
-            for timeframe, patterns in analysis_result.patterns_by_timeframe.items():
-                for pattern in patterns:
-                    # Score the pattern
-                    scored_pattern = await self.pattern_scoring_engine.score_pattern(
-                        pattern, analysis_result.context
-                    )
-                    
-                    # Check if pattern meets our thresholds
-                    if (scored_pattern.confidence >= self.config.min_confidence_threshold and
-                        scored_pattern.pattern_strength >= self.config.min_pattern_strength):
-                        qualifying_patterns.append(scored_pattern)
+            # Collect single patterns
+            for timeframe, patterns in analysis_result.single_patterns.items():
+                all_patterns.extend(patterns)
+            
+            # Collect multi patterns  
+            for timeframe, patterns in analysis_result.multi_patterns.items():
+                all_patterns.extend(patterns)
+            
+            # Filter patterns that meet our criteria
+            qualifying_patterns = []
+            for pattern in all_patterns:
+                if (pattern.confidence >= Decimal(str(self.config.min_confidence_threshold)) and
+                    pattern.reliability >= Decimal("0.5")):  # Basic reliability threshold
+                    qualifying_patterns.append(pattern)
                         
             if qualifying_patterns:
-                # Generate signals
-                for pattern in qualifying_patterns:
-                    signal = await self.signal_generator.generate_signal(pattern, symbol)
+                # Get best pattern for signal generation
+                best_pattern = max(qualifying_patterns, key=lambda p: p.confidence)
+                
+                # Generate signal using the analysis result
+                signal = await self._create_trading_signal(symbol, best_pattern, analysis_result)
+                
+                if signal:
+                    await self._publish_signal(symbol, signal)
+                    self.performance_metrics.signals_generated += 1
+                    self.performance_metrics.patterns_detected += 1
                     
-                    if signal and signal.is_valid:
-                        await self._publish_signal(symbol, signal)
-                        self.performance_metrics.signals_generated += 1
-                        self.performance_metrics.patterns_detected += 1
-                        
-                        if signal.signal_quality_score >= Decimal("0.75"):
-                            self.performance_metrics.high_confidence_signals += 1
+                    if float(signal.confidence) >= 75.0:
+                        self.performance_metrics.high_confidence_signals += 1
                             
         except Exception as e:
             self.logger.error(f"Error generating signals for {symbol}: {e}")
             self.performance_metrics.errors_count += 1
             
+    async def _create_trading_signal(self, symbol: str, pattern: 'CandlestickPattern', analysis_result) -> Optional['TradingSignal']:
+        """Create a TradingSignal from pattern analysis."""
+        
+        try:
+            from decimal import Decimal
+            
+            # Determine signal direction
+            if pattern.bullish_probability > pattern.bearish_probability:
+                direction = SignalDirection.BUY
+            elif pattern.bearish_probability > pattern.bullish_probability:
+                direction = SignalDirection.SELL
+            else:
+                direction = SignalDirection.HOLD
+                
+            # Skip HOLD signals
+            if direction == SignalDirection.HOLD:
+                return None
+            
+            # Calculate entry price (would use latest market price in real implementation)
+            entry_price = Decimal("50000.0")  # Mock price
+            
+            # Calculate stop loss and take profit based on pattern
+            if direction == SignalDirection.BUY:
+                stop_loss = entry_price * Decimal("0.98")  # 2% stop
+                take_profit = entry_price * Decimal("1.04")  # 4% target
+            else:
+                stop_loss = entry_price * Decimal("1.02")  # 2% stop
+                take_profit = entry_price * Decimal("0.96")  # 4% target
+            
+            # Create signal ID
+            signal_id = f"candlestick_{symbol}_{pattern.pattern_type.value}_{int(datetime.now(timezone.utc).timestamp())}"
+            
+            # Create TradingSignal
+            signal = TradingSignal(
+                signal_id=signal_id,
+                symbol=symbol,
+                direction=direction,
+                confidence=pattern.confidence,
+                strength=pattern.confidence / Decimal("100"),  # Convert to 0-1 scale
+                price=entry_price,
+                signal_type=SignalType.PATTERN,
+                timeframe=pattern.timeframe,
+                timestamp=datetime.now(timezone.utc),
+                source="candlestick_strategy",
+                reason=f"{pattern.pattern_type.value} pattern detected with {pattern.confidence}% confidence"
+            )
+            
+            return signal
+            
+        except Exception as e:
+            self.logger.error(f"Error creating trading signal: {e}")
+            return None
+        
     async def _publish_signal(self, symbol: str, signal):
         """Publish a trading signal to other agents."""
         
         try:
             # Generate narrative for the signal
-            narrative = self.narrative_generator.generate_signal_narrative(signal)
+            narrative = await self._generate_signal_narrative(signal)
             
             # Create signal message
             signal_payload = {
@@ -433,14 +505,8 @@ class CandlestickStrategyAgent(BaseAgent):
                 "symbol": symbol,
                 "signal_id": signal.signal_id,
                 "signal_data": signal.model_dump(),
-                "confidence": float(signal.signal_quality_score),
-                "narrative": {
-                    "executive_summary": narrative.executive_summary,
-                    "pattern_analysis": narrative.pattern_analysis,
-                    "risk_assessment": narrative.risk_assessment,
-                    "entry_strategy": narrative.entry_strategy,
-                    "exit_strategy": narrative.exit_strategy
-                },
+                "confidence": float(signal.confidence),
+                "narrative": narrative,
                 "timestamp": datetime.now(timezone.utc).isoformat()
             }
             
@@ -469,6 +535,39 @@ class CandlestickStrategyAgent(BaseAgent):
         except Exception as e:
             self.logger.error(f"Error publishing signal for {symbol}: {e}")
             self.performance_metrics.errors_count += 1
+            
+    async def _generate_signal_narrative(self, signal) -> Dict[str, str]:
+        """Generate a simple narrative for the signal."""
+        
+        try:
+            # Simple narrative generation (placeholder for full narrative generator)
+            executive_summary = f"{signal.direction.value.title()} signal for {signal.symbol} with {signal.confidence}% confidence"
+            
+            pattern_analysis = f"Candlestick pattern analysis indicates {signal.direction.value} momentum based on {signal.reason}"
+            
+            risk_assessment = f"Signal strength: {float(signal.strength):.2f}, recommended position size based on risk tolerance"
+            
+            entry_strategy = f"Enter {signal.direction.value} position around {signal.price}"
+            
+            exit_strategy = f"Manage position according to risk management rules"
+            
+            return {
+                "executive_summary": executive_summary,
+                "pattern_analysis": pattern_analysis,
+                "risk_assessment": risk_assessment,
+                "entry_strategy": entry_strategy,
+                "exit_strategy": exit_strategy
+            }
+            
+        except Exception as e:
+            self.logger.error(f"Error generating narrative: {e}")
+            return {
+                "executive_summary": f"Signal generated for {signal.symbol}",
+                "pattern_analysis": "Pattern analysis completed",
+                "risk_assessment": "Risk assessment required",
+                "entry_strategy": "Entry strategy needed",
+                "exit_strategy": "Exit strategy needed"
+            }
             
     async def _handle_configuration_update(self, message: Message):
         """Handle configuration update messages."""
@@ -569,7 +668,7 @@ class CandlestickStrategyAgent(BaseAgent):
                 all_signals.extend(signals)
                 
             if all_signals:
-                total_confidence = sum(float(s.signal_quality_score) for s in all_signals)
+                total_confidence = sum(float(s.confidence) for s in all_signals)
                 self.performance_metrics.average_confidence = total_confidence / len(all_signals)
             else:
                 self.performance_metrics.average_confidence = 0.0

@@ -173,4 +173,4 @@ config.local.yaml
 # Trading system specific
 positions.json
 trades.json
-market_data/ 
+market_data/ docs/
