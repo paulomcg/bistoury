@@ -170,10 +170,23 @@ class PaperTradingEngine:
             
             # Stop orchestrator and all agents
             if self.orchestrator:
-                await self.orchestrator.stop_all_agents()
+                try:
+                    await self.orchestrator.stop_all_agents()
+                except Exception as e:
+                    self.logger.error(f"Error stopping agents: {e}")
+            
+            # Stop registry
+            if self.agent_registry:
+                try:
+                    await self.agent_registry.stop()
+                except Exception as e:
+                    self.logger.error(f"Error stopping registry: {e}")
             
             # Save final state
-            await self._save_state()
+            try:
+                await self._save_state()
+            except Exception as e:
+                self.logger.error(f"Error saving final state: {e}")
             
             # Update status
             self.status.is_running = False
@@ -184,7 +197,7 @@ class PaperTradingEngine:
             
         except Exception as e:
             self.logger.error(f"Error stopping Paper Trading Engine: {e}")
-            raise
+            # Don't re-raise - we want to mark as stopped even if there were errors
     
     async def _initialize_database(self) -> None:
         """Initialize database connection"""

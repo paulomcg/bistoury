@@ -162,6 +162,19 @@ class HyperLiquidIntegration:
         self.ws_manager = None
         self._main_loop = None  # Store main event loop reference
         
+        # Reconnection control
+        self.auto_reconnect = True
+        self.reconnect_task = None
+        self.reconnect_delay = 1.0
+        self.max_reconnect_delay = 60.0
+        self.reconnect_exponential_base = 2.0
+        self.connection_lost_time = None
+        
+        # Connection monitoring
+        self.last_message_time = None
+        self.message_timeout = 30.0  # Consider connection dead after 30s of no messages
+        self.connection_monitor_task = None
+        
         # Subscription tracking
         self.subscriptions: Dict[str, Dict[str, Any]] = {}
         self.message_handlers: Dict[str, List[Callable]] = {}
@@ -228,8 +241,15 @@ class HyperLiquidIntegration:
                 # Fallback for environments where no loop is running
                 self._main_loop = asyncio.get_event_loop()
                 logger.warning("No running loop found, using get_event_loop() fallback")
-                
+            
+            # Store connection start time for monitoring
+            self._connection_start_time = datetime.now(timezone.utc)
+            
             logger.info("Successfully connected to HyperLiquid WebSocket")
+            
+            # Start connection monitoring
+            if self.auto_reconnect:
+                self._start_connection_monitoring()
             
             return True
             
@@ -238,15 +258,33 @@ class HyperLiquidIntegration:
             self.connected = False
             return False
     
-    async def disconnect(self) -> None:
-        """Disconnect from HyperLiquid WebSocket."""
+    async def disconnect(self, disable_auto_reconnect: bool = False) -> None:
+        """
+        Disconnect from HyperLiquid WebSocket.
+        
+        Args:
+            disable_auto_reconnect: If True, disable automatic reconnection
+        """
         try:
             logger.info("Initiating HyperLiquid WebSocket disconnection...")
+            
+            # Disable auto-reconnect if requested
+            if disable_auto_reconnect:
+                self.auto_reconnect = False
+                if self.reconnect_task:
+                    self.reconnect_task.cancel()
+                    self.reconnect_task = None
+            
+            # Stop connection monitoring
+            if self.connection_monitor_task:
+                self.connection_monitor_task.cancel()
+                self.connection_monitor_task = None
             
             # First, mark as disconnected to stop message processing
             self.connected = False
             
             # Clear subscriptions and handlers first to prevent new processing
+            old_subscriptions = dict(self.subscriptions)
             self.subscriptions.clear()
             self.message_handlers.clear()
             
@@ -273,6 +311,10 @@ class HyperLiquidIntegration:
                 finally:
                     self.ws_manager = None
             
+            # Start reconnection if enabled and not explicitly disabled
+            if not disable_auto_reconnect and self.auto_reconnect:
+                self._start_reconnection(old_subscriptions)
+            
             logger.info("Successfully disconnected from HyperLiquid WebSocket")
             
         except Exception as e:
@@ -280,6 +322,193 @@ class HyperLiquidIntegration:
             # Ensure we're marked as disconnected even if there's an error
             self.connected = False
             self._main_loop = None
+    
+    def _start_reconnection(self, old_subscriptions: Dict[str, Any]) -> None:
+        """Start the reconnection process."""
+        if not self.auto_reconnect:
+            return
+            
+        # Record when connection was lost for metrics
+        self.connection_lost_time = datetime.now(timezone.utc)
+        
+        # Cancel any existing reconnection task
+        if self.reconnect_task:
+            self.reconnect_task.cancel()
+        
+        # Start new reconnection task
+        try:
+            self.reconnect_task = asyncio.create_task(
+                self._reconnection_loop(old_subscriptions)
+            )
+            logger.info("Started automatic reconnection process")
+        except Exception as e:
+            logger.error(f"Failed to start reconnection task: {e}")
+    
+    async def _reconnection_loop(self, old_subscriptions: Dict[str, Any]) -> None:
+        """
+        Continuous reconnection loop with exponential backoff.
+        
+        Args:
+            old_subscriptions: Subscriptions to restore after reconnection
+        """
+        current_delay = self.reconnect_delay
+        attempt = 1
+        
+        logger.info("Starting reconnection loop...")
+        
+        while self.auto_reconnect and not self.connected:
+            try:
+                logger.info(f"Reconnection attempt #{attempt} (delay: {current_delay:.1f}s)")
+                
+                # Wait before attempting reconnection
+                await asyncio.sleep(current_delay)
+                
+                # Attempt to reconnect
+                success = await self._attempt_reconnection(old_subscriptions)
+                
+                if success:
+                    logger.info("Successfully reconnected to HyperLiquid WebSocket!")
+                    
+                    # Reset delay for future disconnections
+                    current_delay = self.reconnect_delay
+                    
+                    # Calculate downtime for metrics
+                    if self.connection_lost_time:
+                        downtime = datetime.now(timezone.utc) - self.connection_lost_time
+                        logger.info(f"Connection restored after {downtime.total_seconds():.1f} seconds")
+                        self.connection_lost_time = None
+                    
+                    break
+                else:
+                    # Exponential backoff with jitter
+                    current_delay = min(
+                        current_delay * self.reconnect_exponential_base,
+                        self.max_reconnect_delay
+                    )
+                    # Add jitter (±25% of delay)
+                    jitter = current_delay * 0.25 * (2 * asyncio.get_event_loop().time() % 1 - 1)
+                    current_delay = max(0.1, current_delay + jitter)
+                    
+                    attempt += 1
+                    logger.warning(f"Reconnection attempt #{attempt-1} failed, next attempt in {current_delay:.1f}s")
+                    
+            except asyncio.CancelledError:
+                logger.info("Reconnection loop cancelled")
+                break
+            except Exception as e:
+                logger.error(f"Error in reconnection loop: {e}")
+                current_delay = min(current_delay * 2, self.max_reconnect_delay)
+                attempt += 1
+        
+        self.reconnect_task = None
+        logger.debug("Reconnection loop ended")
+    
+    async def _attempt_reconnection(self, old_subscriptions: Dict[str, Any]) -> bool:
+        """
+        Attempt to reconnect and restore subscriptions.
+        
+        Args:
+            old_subscriptions: Subscriptions to restore
+            
+        Returns:
+            bool: True if successful, False otherwise
+        """
+        try:
+            # Attempt to connect
+            connected = await self.connect()
+            if not connected:
+                return False
+            
+            # Restore subscriptions
+            restored_count = 0
+            for sub_key, sub_config in old_subscriptions.items():
+                try:
+                    # Parse subscription key to determine type
+                    if sub_key == 'allMids':
+                        success = await self.subscribe_all_mids()
+                    elif sub_key.startswith('trades_'):
+                        symbol = sub_key.replace('trades_', '')
+                        success = await self.subscribe_trades(symbol)
+                    elif sub_key.startswith('l2Book_'):
+                        symbol = sub_key.replace('l2Book_', '')
+                        success = await self.subscribe_orderbook(symbol)
+                    elif sub_key.startswith('candle_'):
+                        # Parse candle subscription: candle_BTC_15m
+                        parts = sub_key.split('_')
+                        if len(parts) >= 3:
+                            symbol = parts[1]
+                            interval = parts[2]
+                            success = await self.subscribe_candle(symbol, interval)
+                        else:
+                            success = False
+                    else:
+                        logger.warning(f"Unknown subscription type: {sub_key}")
+                        success = False
+                    
+                    if success:
+                        restored_count += 1
+                    else:
+                        logger.warning(f"Failed to restore subscription: {sub_key}")
+                    
+                    # Small delay between subscriptions
+                    await asyncio.sleep(0.1)
+                    
+                except Exception as e:
+                    logger.error(f"Error restoring subscription {sub_key}: {e}")
+            
+            logger.info(f"Restored {restored_count}/{len(old_subscriptions)} subscriptions")
+            return True
+            
+        except Exception as e:
+            logger.error(f"Reconnection attempt failed: {e}")
+            return False
+    
+    def _check_connection_health(self, error: Exception) -> None:
+        """
+        Check if an error indicates a connection failure and trigger reconnection.
+        
+        Args:
+            error: Exception that occurred
+        """
+        if not self.connected or not self.auto_reconnect:
+            return
+        
+        error_str = str(error).lower()
+        connection_errors = [
+            'connection closed',
+            'connection lost',
+            'connection to remote host was lost',
+            'websocket connection is closed',
+            'broken pipe',
+            'connection reset',
+            'network is unreachable',
+            'connection timed out',
+            'connection refused',
+            'goodbye'  # HyperLiquid specific disconnect message
+        ]
+        
+        if any(err in error_str for err in connection_errors):
+            logger.warning(f"Connection issue detected: {error}")
+            # Force disconnection to trigger reconnection
+            asyncio.create_task(self._trigger_reconnection())
+    
+    async def _trigger_reconnection(self) -> None:
+        """Trigger reconnection process without explicitly disconnecting."""
+        if not self.auto_reconnect:
+            return
+            
+        try:
+            # Store current subscriptions
+            old_subscriptions = dict(self.subscriptions)
+            
+            # Mark as disconnected to stop processing
+            self.connected = False
+            
+            # Start reconnection process
+            self._start_reconnection(old_subscriptions)
+            
+        except Exception as e:
+            logger.error(f"Error triggering reconnection: {e}")
     
     def add_message_handler(self, subscription_type: str, handler: Callable) -> None:
         """
@@ -492,6 +721,12 @@ class HyperLiquidIntegration:
         # Skip processing if not connected (during shutdown)
         if not self.connected:
             return
+        
+        # Update last message time for connection monitoring
+        self.last_message_time = datetime.now(timezone.utc)
+        
+        # Update connection health
+        self.monitor.record_request(0.1, True)
             
         try:
             # Call registered handlers
@@ -510,13 +745,18 @@ class HyperLiquidIntegration:
         except Exception as e:
             if self.connected:  # Only log if still connected
                 logger.error(f"Error handling all mids message: {e}")
+                # Check if this might be a connection issue
+                self._check_connection_health(e)
     
     def _handle_orderbook_message(self, message: Dict[str, Any]) -> None:
         """Handle order book update messages."""
         # Skip processing if not connected (during shutdown)
         if not self.connected:
             return
-            
+        
+        # Update last message time for connection monitoring
+        self.last_message_time = datetime.now(timezone.utc)
+        
         try:
             # Extract symbol from message
             data = message.get('data', {})
@@ -537,6 +777,8 @@ class HyperLiquidIntegration:
         except Exception as e:
             if self.connected:  # Only log if still connected
                 logger.error(f"Error handling order book message: {e}")
+                # Check if this might be a connection issue
+                self._check_connection_health(e)
     
     def _handle_trades_message(self, message: Dict[str, Any]) -> None:
         """
@@ -548,7 +790,10 @@ class HyperLiquidIntegration:
         # Skip processing if not connected (during shutdown)
         if not self.connected:
             return
-            
+        
+        # Update last message time for connection monitoring
+        self.last_message_time = datetime.now(timezone.utc)
+        
         try:
             # Call all registered handlers for trades
             for handler in self.message_handlers.get('trades', []):
@@ -565,6 +810,8 @@ class HyperLiquidIntegration:
         except Exception as e:
             if self.connected:  # Only log if still connected
                 logger.error(f"Error handling trades message: {e}")
+                # Check if this might be a connection issue
+                self._check_connection_health(e)
 
     def _handle_candle_message(self, message: Dict[str, Any]) -> None:
         """
@@ -576,7 +823,10 @@ class HyperLiquidIntegration:
         # Skip processing if not connected (during shutdown)
         if not self.connected:
             return
-            
+        
+        # Update last message time for connection monitoring
+        self.last_message_time = datetime.now(timezone.utc)
+        
         try:
             # Call all registered handlers for candles
             for handler in self.message_handlers.get('candle', []):
@@ -594,6 +844,8 @@ class HyperLiquidIntegration:
         except Exception as e:
             if self.connected:  # Only log if still connected
                 logger.error(f"Error handling candles message: {e}")
+                # Check if this might be a connection issue
+                self._check_connection_health(e)
     
     # REST API Methods using official SDK
     
@@ -1183,6 +1435,100 @@ class HyperLiquidIntegration:
         return self.monitor.get_stats()
 
     def reset_performance_stats(self) -> None:
-        """Reset performance monitoring statistics."""
+        """Reset connection monitoring stats."""
         self.monitor = ConnectionMonitor()
-        logger.info("Performance statistics reset")
+    
+    def enable_auto_reconnect(self) -> None:
+        """Enable automatic reconnection on connection loss."""
+        self.auto_reconnect = True
+        logger.info("Automatic reconnection enabled")
+    
+    def disable_auto_reconnect(self) -> None:
+        """Disable automatic reconnection on connection loss."""
+        self.auto_reconnect = False
+        # Cancel any existing reconnection task
+        if self.reconnect_task:
+            self.reconnect_task.cancel()
+            self.reconnect_task = None
+        # Cancel connection monitoring
+        if self.connection_monitor_task:
+            self.connection_monitor_task.cancel()
+            self.connection_monitor_task = None
+        logger.info("Automatic reconnection disabled")
+    
+    def set_message_timeout(self, timeout_seconds: float) -> None:
+        """
+        Set the message timeout for connection monitoring.
+        
+        Args:
+            timeout_seconds: Seconds to wait for messages before considering connection dead
+        """
+        self.message_timeout = timeout_seconds
+        logger.info(f"Message timeout set to {timeout_seconds}s")
+    
+    def get_reconnection_stats(self) -> Dict[str, Any]:
+        """Get reconnection statistics."""
+        return {
+            "auto_reconnect_enabled": self.auto_reconnect,
+            "currently_connected": self.connected,
+            "reconnection_task_active": self.reconnect_task is not None,
+            "connection_monitor_active": self.connection_monitor_task is not None,
+            "connection_lost_time": self.connection_lost_time.isoformat() if self.connection_lost_time else None,
+            "last_message_time": self.last_message_time.isoformat() if self.last_message_time else None,
+            "message_timeout_seconds": self.message_timeout,
+            "current_delay": self.reconnect_delay,
+            "max_delay": self.max_reconnect_delay
+        }
+
+    def _start_connection_monitoring(self) -> None:
+        """Start monitoring connection health by tracking message flow."""
+        if self.connection_monitor_task:
+            self.connection_monitor_task.cancel()
+        
+        try:
+            self.connection_monitor_task = asyncio.create_task(self._connection_monitor_loop())
+            logger.debug("Started connection monitoring")
+        except Exception as e:
+            logger.error(f"Failed to start connection monitoring: {e}")
+    
+    async def _connection_monitor_loop(self) -> None:
+        """Monitor connection health by checking message flow."""
+        logger.debug("Connection monitoring loop started")
+        
+        while self.connected and self.auto_reconnect:
+            try:
+                await asyncio.sleep(5.0)  # Check every 5 seconds
+                
+                if not self.connected:
+                    break
+                
+                # Check if we've received any messages recently
+                now = datetime.now(timezone.utc)
+                
+                # If we have subscriptions but no recent messages, consider connection dead
+                if (self.subscriptions and 
+                    self.last_message_time and 
+                    (now - self.last_message_time).total_seconds() > self.message_timeout):
+                    
+                    logger.warning(f"No messages received for {self.message_timeout}s, connection appears dead")
+                    await self._trigger_reconnection()
+                    break
+                
+                # If we have subscriptions but have never received any messages after 30s, reconnect
+                elif (self.subscriptions and 
+                      not self.last_message_time and 
+                      hasattr(self, '_connection_start_time') and
+                      (now - self._connection_start_time).total_seconds() > 30.0):
+                    
+                    logger.warning("No messages received since connection start, triggering reconnection")
+                    await self._trigger_reconnection()
+                    break
+                    
+            except asyncio.CancelledError:
+                logger.debug("Connection monitoring cancelled")
+                break
+            except Exception as e:
+                logger.error(f"Error in connection monitoring: {e}")
+                await asyncio.sleep(5.0)  # Continue monitoring despite errors
+        
+        logger.debug("Connection monitoring loop ended")
