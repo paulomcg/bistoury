@@ -335,6 +335,7 @@ class TradingNarrative(BaseModel):
         }
     )
     
+    symbol: str = Field(..., description="Trading symbol (BTC, ETH, etc.)")
     executive_summary: str = Field(..., description="High-level trading summary")
     market_overview: str = Field(..., description="Current market condition overview")
     pattern_analysis: str = Field(..., description="Detailed pattern analysis")
@@ -462,6 +463,7 @@ class NarrativeGenerator:
         key_warnings = self._generate_key_warnings(signal)
         
         return TradingNarrative(
+            symbol=pattern.symbol,
             executive_summary=executive_summary,
             market_overview=market_overview,
             pattern_analysis=pattern_analysis,

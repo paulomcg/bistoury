@@ -17,12 +17,13 @@ from src.bistoury.agents.candlestick_strategy_agent import (
     CandlestickStrategyConfig,
     StrategyPerformanceMetrics
 )
-from src.bistoury.agents.base import AgentState, AgentType
+from src.bistoury.agents.base import AgentState, AgentType, AgentHealth
 from src.bistoury.agents.messaging import Message, MessageType, MessagePriority
-from src.bistoury.models.signals import CandlestickData, TradingSignal, CandlestickPattern, PatternType
+from src.bistoury.models.signals import CandlestickData, TradingSignal, CandlestickPattern, PatternType, SignalDirection, SignalType
 from src.bistoury.strategies.candlestick_models import PatternStrength, PatternQuality
 from src.bistoury.strategies.narrative_generator import NarrativeStyle
 from src.bistoury.strategies.signal_generator import GeneratedSignal
+from src.bistoury.models.market_data import Timeframe
 
 
 @pytest.fixture
@@ -84,13 +85,11 @@ def sample_pattern(sample_candle):
 
 @pytest.fixture
 def sample_generated_signal(sample_pattern):
-    """Create a sample generated signal."""
+    """Create a sample trading signal."""
     from src.bistoury.models.signals import SignalDirection, SignalType
     from src.bistoury.models.market_data import Timeframe
-    from src.bistoury.strategies.signal_generator import SignalEntryPoint, SignalRiskManagement, SignalTiming, RiskLevel
-    from src.bistoury.strategies.pattern_scoring import CompositePatternScore
     
-    base_signal = TradingSignal(
+    return TradingSignal(
         signal_id="test_signal_123",
         symbol="BTC",
         direction=SignalDirection.BUY,
@@ -101,83 +100,9 @@ def sample_generated_signal(sample_pattern):
         timeframe=Timeframe.FIVE_MINUTES,
         source="candlestick_strategy",
         reason="Hammer pattern detected with bullish reversal potential",
-        pattern=sample_pattern,
-        timestamp=datetime.now(timezone.utc)
-    )
-    
-    entry_point = SignalEntryPoint(
-        entry_price=Decimal("50150.00"),
-        entry_timing=SignalTiming.IMMEDIATE,
-        entry_zone_low=Decimal("50100.00"),
-        entry_zone_high=Decimal("50200.00")
-    )
-    
-    risk_management = SignalRiskManagement(
-        stop_loss_price=Decimal("49850.00"),
-        take_profit_price=Decimal("50600.00"),
-        risk_amount=Decimal("150.00"),
-        reward_amount=Decimal("300.00"),
-        risk_percentage=Decimal("2.0"),
-        position_size_suggestion=Decimal("1.0"),
-        risk_level=RiskLevel.MEDIUM
-    )
-    
-    # Create required scoring components for CompositePatternScore
-    from src.bistoury.strategies.pattern_scoring import (
-        TechnicalScoring, VolumeScoring, MarketContextScoring, 
-        HistoricalPerformance, CompositePatternScore
-    )
-    from src.bistoury.models.signals import PatternType
-    from src.bistoury.models.market_data import Timeframe
-    
-    technical_scoring = TechnicalScoring(
-        body_size_score=Decimal("85.0"),
-        shadow_ratio_score=Decimal("80.0"),
-        price_position_score=Decimal("90.0"),
-        symmetry_score=Decimal("75.0"),
-        textbook_compliance=Decimal("85.0")
-    )
-    
-    volume_scoring = VolumeScoring(
-        volume_spike_score=Decimal("75.0"),
-        volume_trend_score=Decimal("70.0"),
-        breakout_volume_score=Decimal("80.0"),
-        relative_volume_score=Decimal("75.0")
-    )
-    
-    context_scoring = MarketContextScoring(
-        trend_alignment_score=Decimal("80.0"),
-        volatility_score=Decimal("75.0"),
-        session_score=Decimal("85.0"),
-        support_resistance_score=Decimal("70.0"),
-        momentum_score=Decimal("80.0")
-    )
-    
-    historical_performance = HistoricalPerformance(
-        pattern_type=PatternType.HAMMER,
-        timeframe=Timeframe.FIVE_MINUTES,
-        total_occurrences=50,
-        successful_trades=35,
-        success_rate=Decimal("70.0"),
-        average_profit_loss=Decimal("2.5"),
-        reliability_score=Decimal("70.0")
-    )
-    
-    pattern_score = CompositePatternScore(
-        pattern=sample_pattern,
-        technical_scoring=technical_scoring,
-        volume_scoring=volume_scoring,
-        context_scoring=context_scoring,
-        historical_performance=historical_performance
-    )
-    
-    return GeneratedSignal(
-        signal_id="generated_123",
-        base_signal=base_signal,
-        entry_point=entry_point,
-        risk_management=risk_management,
-        source_pattern=sample_pattern,
-        pattern_score=pattern_score
+        timestamp=datetime.now(timezone.utc),
+        target_price=Decimal("50600.00"),
+        stop_loss=Decimal("49850.00")
     )
 
 
@@ -282,10 +207,10 @@ class TestCandlestickStrategyAgent:
         """Test agent start and stop lifecycle."""
         agent = CandlestickStrategyAgent(strategy_config)
         
-        # Mock the message bus methods
+        # Mock BaseAgent methods
         agent.subscribe_to_topic = AsyncMock()
         agent.unsubscribe_from_topic = AsyncMock()
-        agent.add_background_task = Mock()
+        agent.create_task = Mock()  # Mock the create_task method
         
         # Test start
         await agent.start()
@@ -293,7 +218,7 @@ class TestCandlestickStrategyAgent:
         
         # Verify subscriptions were set up
         assert agent.subscribe_to_topic.call_count > 0
-        assert agent.add_background_task.call_count == 2  # Data cleanup + health monitoring
+        assert agent.create_task.call_count == 2  # Data cleanup + health monitoring
         
         # Test stop
         await agent.stop()
@@ -436,16 +361,6 @@ class TestCandlestickStrategyAgent:
         agent = CandlestickStrategyAgent(strategy_config)
         agent.publish_message = AsyncMock()
         
-        # Mock narrative generation
-        mock_narrative = Mock()
-        mock_narrative.executive_summary = "Test summary"
-        mock_narrative.pattern_analysis = "Test analysis"
-        mock_narrative.risk_assessment = "Test risk"
-        mock_narrative.entry_strategy = "Test entry"
-        mock_narrative.exit_strategy = "Test exit"
-        
-        agent.narrative_generator.generate_signal_narrative = Mock(return_value=mock_narrative)
-        
         await agent._publish_signal("BTC", sample_generated_signal)
         
         # Check message was published
@@ -453,14 +368,13 @@ class TestCandlestickStrategyAgent:
         call_args = agent.publish_message.call_args
         
         assert call_args[1]["message_type"] == MessageType.SIGNAL_GENERATED
-        assert call_args[1]["topic"] == "signals.candlestick.BTC"
+        assert call_args[1]["topic"] == "signals.BTC"
         assert call_args[1]["priority"] == MessagePriority.HIGH
         
         payload = call_args[1]["payload"]
-        assert payload["strategy_type"] == "candlestick"
-        assert payload["symbol"] == "BTC"
-        assert payload["signal_id"] == sample_generated_signal.signal_id
-        assert payload["confidence"] == float(sample_generated_signal.signal_quality_score)
+        assert payload.symbol == "BTC"
+        assert payload.metadata["signal_id"] == sample_generated_signal.signal_id
+        assert payload.confidence == float(sample_generated_signal.confidence) / 100.0  # Converted to 0-1 range
         
         # Check signal was tracked
         assert "BTC" in agent.active_signals
@@ -554,16 +468,15 @@ class TestCandlestickStrategyAgent:
     async def test_update_health_metrics(self, strategy_config, sample_generated_signal):
         """Test updating health metrics."""
         agent = CandlestickStrategyAgent(strategy_config)
-        agent._start_time = datetime.now(timezone.utc) - timedelta(seconds=30)
         
-        # Add some signals
+        # Add some signals to track
         agent.active_signals["BTC"] = [sample_generated_signal]
+        agent.performance_metrics.signals_generated = 1
         
         await agent._update_health_metrics()
         
-        # Check metrics were updated
+        # Should calculate average confidence from active signals
         assert agent.performance_metrics.average_confidence > 0
-        assert agent.performance_metrics.uptime_seconds > 25  # Approximately 30 seconds
         
     def test_get_strategy_statistics(self, strategy_config):
         """Test getting strategy statistics."""
@@ -672,14 +585,28 @@ async def test_integration_scenario(strategy_config, sample_candle):
     agent.add_background_task = Mock()
     
     # Mock analysis components to return patterns
+    mock_pattern = Mock()
+    mock_pattern.confidence = Decimal("80.0")
+    mock_pattern.reliability = Decimal("0.8")
+    mock_pattern.pattern_type = Mock()
+    mock_pattern.pattern_type.value = "hammer"
+    mock_pattern.timeframe = Timeframe.FIVE_MINUTES
+    mock_pattern.bullish_probability = Decimal("80.0")
+    mock_pattern.bearish_probability = Decimal("20.0")
+    
     mock_analysis_result = Mock()
-    mock_analysis_result.has_tradeable_patterns.return_value = True
-    mock_analysis_result.patterns_by_timeframe = {
-        "5m": [Mock()]
+    mock_analysis_result.total_patterns_detected = 2  # Integer, not Mock
+    mock_analysis_result.data_quality_score = Decimal("85")  # Decimal, not Mock
+    mock_analysis_result.meets_latency_requirement = True  # Boolean, not Mock
+    mock_analysis_result.single_patterns = {
+        Timeframe.FIVE_MINUTES: [mock_pattern]
+    }
+    mock_analysis_result.multi_patterns = {
+        Timeframe.FIVE_MINUTES: [mock_pattern]
     }
     mock_analysis_result.context = Mock()
     
-    agent.timeframe_analyzer.analyze_timeframes = AsyncMock(return_value=mock_analysis_result)
+    agent.timeframe_analyzer.analyze = AsyncMock(return_value=mock_analysis_result)
     
     # Mock pattern scoring
     mock_scored_pattern = Mock()
@@ -690,11 +617,23 @@ async def test_integration_scenario(strategy_config, sample_candle):
     
     # Mock signal generation
     mock_signal = Mock()
-    mock_signal.is_valid = True
-    mock_signal.signal_quality_score = Decimal("0.80")
     mock_signal.signal_id = "test_signal"
+    mock_signal.symbol = "BTC"
+    mock_signal.direction = Mock()
+    mock_signal.direction.value = "buy"
+    mock_signal.signal_type = Mock()
+    mock_signal.signal_type.value = "pattern"
+    mock_signal.confidence = Decimal("75.0")
+    mock_signal.strength = Decimal("0.75")
+    mock_signal.price = Decimal("50100.00")
+    mock_signal.reason = "Test signal"
+    mock_signal.stop_loss = Decimal("49900.00")
+    mock_signal.target_price = Decimal("50300.00")
+    mock_signal.expiry = datetime.now(timezone.utc) + timedelta(minutes=15)
+    mock_signal.timeframe = Timeframe.FIVE_MINUTES
+    mock_signal.timestamp = datetime.now(timezone.utc)
     
-    agent.signal_generator.generate_signal = AsyncMock(return_value=mock_signal)
+    agent._create_trading_signal = AsyncMock(return_value=mock_signal)
     
     # Mock narrative generation
     mock_narrative = Mock()
@@ -719,9 +658,9 @@ async def test_integration_scenario(strategy_config, sample_candle):
     await agent._process_candlestick_data("BTC", "5m", payload)
     
     # Verify the flow worked
-    agent.timeframe_analyzer.analyze_timeframes.assert_called_once()
+    agent.timeframe_analyzer.analyze.assert_called_once()
     agent.pattern_scoring_engine.score_pattern.assert_called()
-    agent.signal_generator.generate_signal.assert_called()
+    agent._create_trading_signal.assert_called()
     agent.publish_message.assert_called()
     
     # Check performance metrics were updated

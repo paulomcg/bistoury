@@ -367,8 +367,9 @@ class NarrativeContinuityTracker:
         if not story.narrative_sequence:
             return True
         
-        # Check time gap
-        time_gap = current_time - story.end_time if story.end_time else timedelta(0)
+        # Check time gap from the last narrative time
+        last_time = story.end_time if story.end_time else story.start_time
+        time_gap = current_time - last_time
         max_gap = timedelta(hours=self.config.continuity_window_hours)
         
         return time_gap <= max_gap
@@ -539,7 +540,7 @@ class NarrativeArchiver:
         # Save to file
         chunk_file = self.storage_path / f"{chunk_id}.json"
         with open(chunk_file, 'w') as f:
-            json.dump(chunk.model_dump(default=str), f, separators=(',', ':'))
+            json.dump(chunk.model_dump(mode='json'), f, separators=(',', ':'))
         
         # Update indexes
         self.archived_chunks[chunk_id] = chunk

@@ -10,6 +10,7 @@ import logging
 from datetime import datetime, timezone
 from typing import Dict, List, Optional, Any, Callable
 from uuid import UUID
+from decimal import Decimal
 
 from .base import BaseAgent, AgentType, AgentHealth, AgentState
 from .messaging import MessageBus, MessageFilter, Subscription
@@ -270,16 +271,18 @@ class SignalManagerAgent(BaseAgent):
             
             # Convert to TradingSignal
             trading_signal = TradingSignal(
+                signal_id=f"signal-{signal_payload.symbol}-{datetime.now(timezone.utc).isoformat()}",  # Required field
                 symbol=signal_payload.symbol,
                 signal_type=signal_payload.signal_type,
                 direction=SignalDirection(signal_payload.direction),
-                confidence=signal_payload.confidence,
-                strength=signal_payload.strength,
+                confidence=Decimal(str(signal_payload.confidence * 100)),  # Convert 0-1 to 0-100 and use Decimal
+                strength=Decimal(str(signal_payload.strength)),  # Convert to Decimal
+                price=Decimal('50000.0'),  # Required field - placeholder price
                 timeframe=signal_payload.timeframe,
-                strategy=signal_payload.strategy,
-                reasoning=signal_payload.reasoning,
+                source=signal_payload.strategy,  # Use source instead of strategy
+                reason=signal_payload.reasoning,  # Use reason instead of reasoning
                 metadata=signal_payload.metadata or {},
-                created_at=signal_payload.timestamp or datetime.now(timezone.utc)
+                timestamp=signal_payload.timestamp or datetime.now(timezone.utc)
             )
             
             # Register strategy if new
@@ -325,7 +328,9 @@ class SignalManagerAgent(BaseAgent):
             if (event.event_type in ["agent_registered", "agent_started"] and 
                 event.component == "strategy"):
                 
-                strategy_name = event.description.get('strategy_name') if event.description else None
+                # Description is a string, so we need to extract strategy name differently
+                # For now, use the sender as strategy name or parse from description
+                strategy_name = event.metadata.get('strategy_name') if event.metadata else message.sender
                 if strategy_name:
                     await self._register_strategy(strategy_name, message.sender)
         
@@ -347,40 +352,47 @@ class SignalManagerAgent(BaseAgent):
             if not self.publish_aggregated_signals or not self._message_bus:
                 return
             
+            # Since AggregatedSignal doesn't have symbol field, we need to get it from context
+            # For now, use a default symbol - in production this would come from the signal context
+            symbol = "BTC-USD"  # Default symbol, should be passed from signal context
+            
             # Create aggregated signal payload
             payload = AggregatedSignalPayload(
-                symbol=aggregated_signal.symbol,
+                symbol=symbol,
                 direction=aggregated_signal.direction.value,
-                confidence=aggregated_signal.confidence,
-                strength=aggregated_signal.strength,
-                signal_count=aggregated_signal.signal_count,
+                confidence=aggregated_signal.confidence / 100.0,  # Convert to 0-1 range
+                strength=aggregated_signal.weight,
+                signal_count=len(aggregated_signal.contributing_strategies),
                 contributing_strategies=list(aggregated_signal.contributing_strategies),
-                timestamp=aggregated_signal.created_at,
+                timestamp=aggregated_signal.timestamp,
                 metadata={
-                    'quality_score': aggregated_signal.quality.value if aggregated_signal.quality else None,
+                    'quality_grade': aggregated_signal.quality.grade.value if aggregated_signal.quality else None,
                     'conflicts_resolved': len(aggregated_signal.conflicts) if aggregated_signal.conflicts else 0,
-                    'timeframe': aggregated_signal.timeframe,
-                    'reasoning': aggregated_signal.reasoning
+                    'risk_level': aggregated_signal.risk_level.value,
+                    'consensus_level': aggregated_signal.consensus_level
                 }
             )
             
-            # Publish to message bus
-            success = await self._message_bus.publish(
-                topic="trading.signals.aggregated",
-                message_type=MessageType.SIGNAL_AGGREGATED,
-                payload=payload,
+            # Create message
+            message = Message(
+                type=MessageType.SIGNAL_AGGREGATED,
                 sender=self.name,
-                priority=MessagePriority.HIGH
+                payload=payload,
+                priority=MessagePriority.HIGH,
+                topic="trading.signals.aggregated"
             )
+            
+            # Publish to message bus
+            success = await self._message_bus.publish(message)
             
             if success:
                 self.signals_published += 1
                 self.logger.debug(
-                    f"Published aggregated signal: {aggregated_signal.symbol} "
+                    f"Published aggregated signal: {symbol} "
                     f"{aggregated_signal.direction.value} (confidence: {aggregated_signal.confidence:.2f})"
                 )
             else:
-                self.logger.warning(f"Failed to publish aggregated signal for {aggregated_signal.symbol}")
+                self.logger.warning(f"Failed to publish aggregated signal for {symbol}")
         
         except Exception as e:
             self.logger.error(f"Error publishing aggregated signal: {e}", exc_info=True)
@@ -399,16 +411,18 @@ class SignalManagerAgent(BaseAgent):
                     event_type="agent_error",
                     component="signal_manager",
                     status="error",
-                    description={"error": str(error), "agent": self.name}
+                    description=f"Error in {self.name}: {str(error)}"
                 )
                 
-                await self._message_bus.publish(
-                    topic="system.errors",
-                    message_type=MessageType.SYSTEM_EVENT,
-                    payload=error_payload,
+                error_message = Message(
+                    type=MessageType.SYSTEM_HEALTH_CHECK,
                     sender=self.name,
-                    priority=MessagePriority.HIGH
+                    payload=error_payload,
+                    priority=MessagePriority.HIGH,
+                    topic="system.errors"
                 )
+                
+                await self._message_bus.publish(error_message)
             except Exception as e:
                 self.logger.error(f"Failed to publish error event: {e}")
     

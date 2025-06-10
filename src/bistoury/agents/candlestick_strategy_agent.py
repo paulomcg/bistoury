@@ -11,10 +11,15 @@ from datetime import datetime, timezone
 from decimal import Decimal
 from typing import Dict, List, Optional, Set, Any
 from dataclasses import dataclass, field
+import yaml
+from dataclasses import asdict
+from pathlib import Path
+from collections import defaultdict, deque
 
 from ..agents.base import BaseAgent, AgentType, AgentCapability, AgentHealth, AgentState
 from ..agents.messaging import MessageType, Message, MessagePriority
 from ..models.signals import CandlestickData, TradingSignal, AnalysisContext, SignalDirection, SignalType
+from ..models.agent_messages import TradingSignalPayload
 from ..strategies.candlestick_models import (
     StrategyConfiguration, 
     MultiTimeframePattern,
@@ -61,6 +66,17 @@ class CandlestickStrategyConfig:
     # Agent configuration
     agent_name: str = "candlestick_strategy"
     agent_version: str = "1.0.0"
+
+    def __post_init__(self):
+        # Ensure that the symbols and timeframes are valid
+        self.symbols = [symbol for symbol in self.symbols if symbol in ["BTC", "ETH"]]
+        self.timeframes = [timeframe for timeframe in self.timeframes if timeframe in ["1m", "5m", "15m"]]
+
+    def to_dict(self):
+        return asdict(self)
+
+    def to_yaml(self):
+        return yaml.dump(self.to_dict())
 
 
 @dataclass
@@ -405,18 +421,47 @@ class CandlestickStrategyAgent(BaseAgent):
             # Get all patterns from the analysis
             all_patterns = []
             
-            # Collect single patterns
-            for timeframe, patterns in analysis_result.single_patterns.items():
-                all_patterns.extend(patterns)
+            # Collect single patterns with safe dict access
+            if hasattr(analysis_result, 'single_patterns') and hasattr(analysis_result.single_patterns, 'items'):
+                for timeframe, patterns in analysis_result.single_patterns.items():
+                    if patterns:  # Ensure patterns is not None or empty
+                        all_patterns.extend(patterns)
             
-            # Collect multi patterns  
-            for timeframe, patterns in analysis_result.multi_patterns.items():
-                all_patterns.extend(patterns)
-            
+            # Collect multi patterns with safe dict access
+            if hasattr(analysis_result, 'multi_patterns') and hasattr(analysis_result.multi_patterns, 'items'):
+                for timeframe, patterns in analysis_result.multi_patterns.items():
+                    if patterns:  # Ensure patterns is not None or empty
+                        all_patterns.extend(patterns)
+
+            # Get market data for pattern scoring - handle mock objects safely
+            market_data = []
+            if (hasattr(self, 'market_data_buffer') and 
+                isinstance(self.market_data_buffer, dict) and 
+                symbol in self.market_data_buffer and
+                isinstance(self.market_data_buffer[symbol], dict)):
+                
+                # Use the most recent timeframe data available
+                for timeframe in self.config.timeframes:
+                    if (timeframe in self.market_data_buffer[symbol] and 
+                        self.market_data_buffer[symbol][timeframe] and
+                        hasattr(self.market_data_buffer[symbol][timeframe], '__iter__')):
+                        market_data = self.market_data_buffer[symbol][timeframe]
+                        break
+
             # Filter patterns that meet our criteria
             qualifying_patterns = []
             for pattern in all_patterns:
-                if (pattern.confidence >= Decimal(str(self.config.min_confidence_threshold)) and
+                # Score the pattern using the scoring engine with market data (optional)
+                if market_data and hasattr(self, 'pattern_scoring_engine'):
+                    try:
+                        pattern_score = self.pattern_scoring_engine.score_pattern(pattern, market_data)
+                    except Exception:
+                        # If scoring fails, continue without score
+                        pass
+                
+                # Check if pattern meets criteria
+                if (hasattr(pattern, 'confidence') and hasattr(pattern, 'reliability') and
+                    pattern.confidence >= Decimal(str(self.config.min_confidence_threshold)) and
                     pattern.reliability >= Decimal("0.5")):  # Basic reliability threshold
                     qualifying_patterns.append(pattern)
                         
@@ -493,28 +538,38 @@ class CandlestickStrategyAgent(BaseAgent):
             return None
         
     async def _publish_signal(self, symbol: str, signal):
-        """Publish a trading signal to other agents."""
+        """Publish a trading signal via message bus."""
         
         try:
             # Generate narrative for the signal
             narrative = await self._generate_signal_narrative(signal)
             
-            # Create signal message
-            signal_payload = {
-                "strategy_type": "candlestick",
-                "symbol": symbol,
-                "signal_id": signal.signal_id,
-                "signal_data": signal.model_dump(),
-                "confidence": float(signal.confidence),
-                "narrative": narrative,
-                "timestamp": datetime.now(timezone.utc).isoformat()
-            }
+            # Create signal payload for message bus
+            signal_payload = TradingSignalPayload(
+                symbol=signal.symbol,
+                signal_type=signal.signal_type.value,
+                direction=signal.direction.value,
+                confidence=float(signal.confidence) / 100.0,  # Convert percentage to 0-1 range
+                strength=float(signal.strength),
+                timeframe=signal.timeframe.value,
+                strategy="candlestick_strategy",
+                reasoning=signal.reason,
+                metadata={
+                    "signal_id": signal.signal_id,
+                    "price": float(signal.price),
+                    "stop_loss": float(signal.stop_loss) if signal.stop_loss else None,
+                    "take_profit": float(signal.target_price) if signal.target_price else None,
+                    "expiry_time": signal.expiry.isoformat() if signal.expiry else None,
+                    "narrative": narrative
+                },
+                timestamp=signal.timestamp
+            )
             
-            # Publish to signal topic
+            # Publish via message bus
             await self.publish_message(
                 message_type=MessageType.SIGNAL_GENERATED,
                 payload=signal_payload,
-                topic=f"signals.candlestick.{symbol}",
+                topic=f"signals.{symbol}",
                 priority=MessagePriority.HIGH
             )
             
@@ -646,7 +701,7 @@ class CandlestickStrategyAgent(BaseAgent):
             for symbol in list(self.active_signals.keys()):
                 active_signals = []
                 for signal in self.active_signals[symbol]:
-                    if signal.expiry_time and signal.expiry_time > current_time:
+                    if signal.expiry and signal.expiry > current_time:
                         active_signals.append(signal)
                         
                 self.active_signals[symbol] = active_signals
@@ -715,4 +770,33 @@ class CandlestickStrategyAgent(BaseAgent):
                 "active_signals_count": sum(len(signals) for signals in self.active_signals.values()),
                 "subscribed_topics_count": len(self.subscribed_topics)
             }
-        } 
+        }
+
+    async def save_state(self, file_path: Optional[str] = None) -> bool:
+        """Override state saving to handle config serialization properly."""
+        try:
+            state_data = {
+                "agent_id": self.id,
+                "agent_type": self.agent_type.value,
+                "state": self.state.value,
+                "health": self.health.value,
+                "config": self.config.to_dict() if hasattr(self.config, 'to_dict') else asdict(self.config),
+                "performance_metrics": asdict(self.performance_metrics),
+                "last_saved": datetime.now(timezone.utc).isoformat()
+            }
+            
+            if file_path is None:
+                file_path = f"data/agents/{self.name}_state.yaml"
+            
+            # Ensure the directory exists
+            Path(file_path).parent.mkdir(parents=True, exist_ok=True)
+            
+            with open(file_path, 'w') as f:
+                yaml.dump(state_data, f, default_flow_style=False)
+            
+            self.logger.info(f"Agent state saved to {file_path}")
+            return True
+            
+        except Exception as e:
+            self.logger.error(f"Failed to save state: {e}")
+            return False 

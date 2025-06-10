@@ -343,7 +343,7 @@ class TestEndToEndIntegration:
             # Check call arguments
             call_args = integration_agent.publish_message.call_args
             assert call_args[1]['message_type'] == MessageType.SIGNAL_GENERATED
-            assert call_args[1]['topic'] == "signals.candlestick.BTC"
+            assert call_args[1]['topic'] == "signals.BTC"
             assert call_args[1]['priority'] == MessagePriority.HIGH
             
             # Verify performance metrics
@@ -598,8 +598,10 @@ class TestSignalQuality:
                 payload = call_args[1]['payload']
                 
                 # Check signal direction (should be bullish for hammer)
-                assert 'signal_data' in payload
-                # Additional checks would depend on the signal data structure
+                assert payload.direction == 'buy'  # Hammer should generate bullish signal
+                assert payload.confidence > 0.6  # Should have reasonable confidence
+                assert payload.symbol == 'BTC'
+                assert payload.strategy == 'candlestick_strategy'
         
         await integration_agent.stop()
     

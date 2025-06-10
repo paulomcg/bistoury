@@ -173,6 +173,7 @@ class TestTradingNarrative:
     def test_narrative_sections_property(self):
         """Test narrative sections property."""
         narrative = TradingNarrative(
+            symbol="BTC",
             executive_summary="Test summary",
             market_overview="Test overview", 
             pattern_analysis="Test pattern",
@@ -192,6 +193,7 @@ class TestTradingNarrative:
     def test_full_narrative_generation(self):
         """Test full narrative text generation."""
         narrative = TradingNarrative(
+            symbol="BTC",
             executive_summary="Test summary",
             market_overview="Test overview",
             pattern_analysis="Test pattern", 

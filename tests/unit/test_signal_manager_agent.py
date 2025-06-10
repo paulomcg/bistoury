@@ -9,6 +9,7 @@ import pytest
 from datetime import datetime, timezone, timedelta
 from unittest.mock import Mock, AsyncMock, patch
 from typing import Dict, Any
+from decimal import Decimal
 
 from src.bistoury.agents.signal_manager_agent import SignalManagerAgent
 from src.bistoury.agents.base import AgentState, AgentType
@@ -17,7 +18,7 @@ from src.bistoury.models.agent_messages import (
     Message, MessageType, MessagePriority, TradingSignalPayload,
     AggregatedSignalPayload, SystemEventPayload
 )
-from src.bistoury.models.signals import TradingSignal, SignalDirection, RiskLevel
+from src.bistoury.models.signals import TradingSignal, SignalDirection, RiskLevel, SignalType
 from src.bistoury.models.market_data import Timeframe
 from src.bistoury.signal_manager.signal_manager import SignalManagerConfiguration
 from src.bistoury.signal_manager.models import AggregatedSignal, SignalQuality, SignalQualityGrade
@@ -69,14 +70,16 @@ class TestSignalManagerAgent:
     def sample_trading_signal(self):
         """Sample trading signal."""
         return TradingSignal(
+            signal_id=f"test-signal-{datetime.now(timezone.utc).isoformat()}",
             symbol="BTC-USD",
-            signal_type="bullish_engulfing",
+            signal_type=SignalType.PATTERN,  # Use SignalType enum instead of string
             direction=SignalDirection.BUY,
-            confidence=0.75,
-            strength=0.8,
+            confidence=Decimal('75'),  # Use Decimal
+            strength=Decimal('0.8'),   # Use Decimal  
             timeframe=Timeframe.FIFTEEN_MINUTES,
-            strategy="candlestick_strategy",
-            reasoning="Strong bullish engulfing pattern with high volume confirmation",
+            source="candlestick_strategy",  # Use source instead of strategy
+            reason="Strong bullish engulfing pattern with high volume confirmation",  # Use reason instead of reasoning
+            price=Decimal('50000.0'),  # Required field
             metadata={"volume_ratio": 1.5, "pattern_quality": "high"}
         )
     
@@ -282,22 +285,23 @@ class TestSignalManagerAgent:
         # Create signal message
         signal_payload = TradingSignalPayload(
             symbol=sample_trading_signal.symbol,
-            signal_type=sample_trading_signal.signal_type,
+            signal_type=sample_trading_signal.signal_type.value,  # Convert enum to string
             direction=sample_trading_signal.direction.value,
-            confidence=sample_trading_signal.confidence,
-            strength=sample_trading_signal.strength,
-            timeframe=sample_trading_signal.timeframe,
-            strategy=sample_trading_signal.strategy,
-            reasoning=sample_trading_signal.reasoning,
+            confidence=float(sample_trading_signal.confidence) / 100.0,  # Convert to 0-1 range
+            strength=float(sample_trading_signal.strength),  # Convert Decimal to float
+            timeframe=sample_trading_signal.timeframe.value,  # Convert enum to string
+            strategy=sample_trading_signal.source,
+            reasoning=sample_trading_signal.reason,
             metadata=sample_trading_signal.metadata,
-            timestamp=sample_trading_signal.created_at
+            timestamp=sample_trading_signal.timestamp
         )
         
         message = Message(
-            message_type=MessageType.SIGNAL_GENERATED,
+            type=MessageType.SIGNAL_GENERATED,
             sender="candlestick_agent",
             payload=signal_payload,
-            priority=MessagePriority.NORMAL
+            priority=MessagePriority.NORMAL,
+            topic="trading.signals"
         )
         
         # Handle signal
@@ -322,12 +326,19 @@ class TestSignalManagerAgent:
         # Start agent
         await agent.start()
         
-        # Create invalid message
+        # Create invalid message - valid dict structure but missing required fields
+        invalid_payload = {
+            "symbol": "BTC-USD",
+            "direction": "buy",
+            # Missing required fields like signal_type, confidence, etc.
+        }
+        
         message = Message(
-            message_type=MessageType.SIGNAL_GENERATED,
+            type=MessageType.SIGNAL_GENERATED,
             sender="test_agent",
-            payload="invalid_payload",  # Wrong type
-            priority=MessagePriority.NORMAL
+            payload=invalid_payload,  # Dict that will fail TradingSignalPayload validation
+            priority=MessagePriority.NORMAL,
+            topic="trading.signals"
         )
         
         # Handle signal (should not crash)
@@ -347,14 +358,16 @@ class TestSignalManagerAgent:
             event_type="agent_started",
             component="strategy",
             status="running",
-            description={"strategy_name": "momentum_strategy"}
+            description="momentum_strategy agent started",
+            metadata={"strategy_name": "momentum_strategy"}
         )
         
         message = Message(
-            message_type=MessageType.SYSTEM_EVENT,
+            type=MessageType.SYSTEM_STARTUP,  # Use valid system message type
             sender="momentum_agent",
             payload=event_payload,
-            priority=MessagePriority.NORMAL
+            priority=MessagePriority.NORMAL,
+            topic="system.events"
         )
         
         # Handle event
@@ -392,11 +405,14 @@ class TestSignalManagerAgent:
         mock_message_bus.publish.assert_called_once()
         call_args = mock_message_bus.publish.call_args
         
-        assert call_args.kwargs['topic'] == "trading.signals.aggregated"
-        assert call_args.kwargs['message_type'] == MessageType.SIGNAL_AGGREGATED
-        assert isinstance(call_args.kwargs['payload'], AggregatedSignalPayload)
-        assert call_args.kwargs['sender'] == agent.name
-        assert call_args.kwargs['priority'] == MessagePriority.HIGH
+        # Check the message object that was passed
+        message = call_args[0][0]  # First positional argument
+        assert isinstance(message, Message)
+        assert message.topic == "trading.signals.aggregated"
+        assert message.type == MessageType.SIGNAL_AGGREGATED
+        assert isinstance(message.payload, AggregatedSignalPayload)
+        assert message.sender == agent.name
+        assert message.priority == MessagePriority.HIGH
         
         # Check published signal count
         assert agent.signals_published == 1
@@ -630,10 +646,13 @@ class TestSignalManagerAgent:
         mock_message_bus.publish.assert_called_once()
         call_args = mock_message_bus.publish.call_args
         
-        assert call_args.kwargs['topic'] == "system.errors"
-        assert call_args.kwargs['message_type'] == MessageType.SYSTEM_EVENT
-        assert isinstance(call_args.kwargs['payload'], SystemEventPayload)
-        assert call_args.kwargs['priority'] == MessagePriority.HIGH
+        # Check the message object that was passed
+        message = call_args[0][0]  # First positional argument
+        assert isinstance(message, Message)
+        assert message.topic == "system.errors"
+        assert message.type == MessageType.SYSTEM_HEALTH_CHECK  # Updated to match implementation
+        assert isinstance(message.payload, SystemEventPayload)
+        assert message.priority == MessagePriority.HIGH
 
 
 if __name__ == "__main__":

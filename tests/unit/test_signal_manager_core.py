@@ -79,6 +79,7 @@ def sample_trading_signal():
 def sample_trading_narrative():
     """Create a sample trading narrative for testing"""
     return TradingNarrative(
+        symbol="BTC",
         executive_summary="Strong bullish momentum detected on BTC",
         market_overview="Market showing strong upward momentum with high volume",
         pattern_analysis="Hammer pattern confirmed with strong volume support",

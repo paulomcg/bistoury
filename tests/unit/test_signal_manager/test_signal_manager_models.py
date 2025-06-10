@@ -513,6 +513,7 @@ class TestTemporalSignalBuffer:
         
         # Create test narrative
         narrative = TradingNarrative(
+            symbol="BTC",
             executive_summary="Test bullish signal",
             market_overview="Market showing strength",
             pattern_analysis="Strong bullish pattern detected",
@@ -566,6 +567,7 @@ class TestTemporalSignalBuffer:
             )
             
             narrative = TradingNarrative(
+                symbol="BTC",
                 executive_summary=f"Test signal {i}",
                 market_overview="Market analysis",
                 pattern_analysis="Pattern detected",
@@ -623,6 +625,7 @@ class TestTemporalSignalBuffer:
             )
             
             narrative = TradingNarrative(
+                symbol="BTC",
                 executive_summary=f"Timeline narrative {i}",
                 market_overview="Market analysis",
                 pattern_analysis="Pattern analysis",
@@ -685,6 +688,7 @@ class TestTemporalSignalBuffer:
         )
         
         narrative = TradingNarrative(
+            symbol="BTC",
             executive_summary="Test narrative",
             market_overview="Market analysis",
             pattern_analysis="Pattern analysis",

@@ -23,6 +23,7 @@ from bistoury.models.signals import SignalDirection
 def sample_narrative():
     """Sample TradingNarrative for testing"""
     return TradingNarrative(
+        symbol="BTCUSD",
         executive_summary="BTCUSD showing strong bullish momentum",
         market_overview="Market in uptrend with volume support",
         pattern_analysis="Hammer pattern formed at support level",
@@ -208,6 +209,7 @@ class TestNarrativeBuffer:
             narrative_ids = []
             for i in range(3):
                 narrative = TradingNarrative(
+                    symbol="BTCUSD",
                     executive_summary=f"Narrative {i}",
                     market_overview="Market analysis",
                     pattern_analysis="Pattern analysis",

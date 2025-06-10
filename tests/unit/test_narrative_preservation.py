@@ -34,6 +34,7 @@ from src.bistoury.models.signals import SignalDirection
 def sample_narrative():
     """Create a sample trading narrative for testing"""
     return TradingNarrative(
+        symbol="BTC",
         executive_summary="Bullish hammer pattern detected with strong volume confirmation",
         market_overview="BTC showing bullish momentum with breakout above resistance",
         pattern_analysis="Clear hammer pattern with long lower shadow indicating rejection of lower prices",
@@ -91,8 +92,8 @@ class TestNarrativeCompressor:
             decompressed = compressor.decompress_narrative(compressed_data, level)
             assert isinstance(decompressed, TradingNarrative)
             assert decompressed.symbol == sample_narrative.symbol
-            assert decompressed.direction == sample_narrative.direction
-            assert decompressed.confidence == sample_narrative.confidence
+            assert decompressed.executive_summary == sample_narrative.executive_summary
+            assert decompressed.market_overview == sample_narrative.market_overview
     
     def test_compression_ratio_improvement(self, buffer_config, sample_narrative):
         """Test that higher compression levels reduce size"""
@@ -113,6 +114,7 @@ class TestNarrativeCompressor:
         
         # Small narrative
         small_narrative = TradingNarrative(
+            symbol="BTC",
             executive_summary="Short summary",
             market_overview="Brief overview",
             pattern_analysis="Simple pattern",
@@ -506,8 +508,8 @@ class TestNarrativeArchiver:
             
             assert retrieved is not None
             assert retrieved.symbol == sample_narrative.symbol
-            assert retrieved.direction == sample_narrative.direction
-            assert retrieved.confidence == sample_narrative.confidence
+            assert retrieved.executive_summary == sample_narrative.executive_summary
+            assert retrieved.market_overview == sample_narrative.market_overview
 
 
 class TestNarrativeBuffer:
@@ -573,8 +575,8 @@ class TestNarrativeBuffer:
         
         assert retrieved is not None
         assert retrieved.symbol == sample_narrative.symbol
-        assert retrieved.direction == sample_narrative.direction
-        assert retrieved.confidence == sample_narrative.confidence
+        assert retrieved.executive_summary == sample_narrative.executive_summary
+        assert retrieved.market_overview == sample_narrative.market_overview
         
         # Check stats
         assert narrative_buffer.stats["narratives_retrieved"] == 1
