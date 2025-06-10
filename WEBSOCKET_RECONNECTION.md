@@ -142,9 +142,16 @@ This script demonstrates:
 **To test reconnection**: 
 1. Run the script
 2. Wait for messages to start flowing
-3. Disconnect your network for 15+ seconds  
+3. Disconnect your network for 10+ seconds  
 4. Reconnect your network
 5. Watch automatic reconnection and subscription restoration
+
+**What you'll see:**
+- `⚠️ No messages received for 10s, connection appears dead` 
+- `🔄 Reconnection attempt #1 (delay: 1.0s)`
+- `✅ Reconnection successful and stable` (only when actually working)
+
+The system now validates connections before claiming success, eliminating false "success" messages.
 
 ## 🏭 Production Usage
 

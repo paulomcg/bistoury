@@ -229,8 +229,13 @@ class HyperLiquidIntegration:
             # Start the WebSocket connection (synchronous thread start)
             self.ws_manager.start()
             
-            # Wait a bit for connection to establish
-            await asyncio.sleep(0.5)
+            # Wait longer and validate connection
+            await asyncio.sleep(1.0)
+            
+            # Check if WebSocket thread is actually running
+            if not self.ws_manager.is_alive():
+                logger.error("WebSocket thread failed to start")
+                return False
             
             self.connected = True
             # Store the running event loop for handler scheduling
@@ -378,8 +383,20 @@ class HyperLiquidIntegration:
                         logger.info(f"Connection restored after {downtime.total_seconds():.1f} seconds")
                         self.connection_lost_time = None
                     
-                    break
-                else:
+                    # Wait a bit to see if connection is stable
+                    await asyncio.sleep(5.0)
+                    
+                    # Check if we're still connected and receiving messages
+                    if (self.connected and 
+                        self.last_message_time and 
+                        (datetime.now(timezone.utc) - self.last_message_time).total_seconds() < 10.0):
+                        logger.info("✅ Reconnection successful and stable")
+                        break
+                    else:
+                        logger.warning("Reconnection appeared successful but connection is not stable, retrying...")
+                        success = False  # Force retry
+                
+                if not success:
                     # Exponential backoff with jitter
                     current_delay = min(
                         current_delay * self.reconnect_exponential_base,
@@ -419,6 +436,9 @@ class HyperLiquidIntegration:
             if not connected:
                 return False
             
+            # Wait a moment for connection to stabilize
+            await asyncio.sleep(0.5)
+            
             # Restore subscriptions
             restored_count = 0
             for sub_key, sub_config in old_subscriptions.items():
@@ -456,8 +476,25 @@ class HyperLiquidIntegration:
                 except Exception as e:
                     logger.error(f"Error restoring subscription {sub_key}: {e}")
             
-            logger.info(f"Restored {restored_count}/{len(old_subscriptions)} subscriptions")
-            return True
+            # Only consider successful if we restored subscriptions AND have a working connection
+            if restored_count > 0:
+                logger.info(f"Restored {restored_count}/{len(old_subscriptions)} subscriptions")
+                
+                # Wait a moment to see if we start receiving messages
+                await asyncio.sleep(2.0)
+                
+                # Check if we're actually receiving data
+                if self.last_message_time:
+                    time_since_last = (datetime.now(timezone.utc) - self.last_message_time).total_seconds()
+                    if time_since_last < 10.0:  # Recent message indicates working connection
+                        return True
+                
+                # If no recent messages, don't claim success yet
+                logger.debug("Connection established but no message flow detected yet")
+                return True  # Still return True as connection might work, monitor will detect if it doesn't
+            else:
+                logger.warning("Failed to restore any subscriptions")
+                return False
             
         except Exception as e:
             logger.error(f"Reconnection attempt failed: {e}")
@@ -599,7 +636,7 @@ class HyperLiquidIntegration:
             # Track subscription
             self.subscriptions['allMids'] = subscription
             
-            logger.info("Successfully subscribed to all mids")
+            logger.debug("Subscribed to all mids")
             return True
             
         except Exception as e:
@@ -636,7 +673,7 @@ class HyperLiquidIntegration:
             subscription_key = f'l2Book_{symbol}'
             self.subscriptions[subscription_key] = subscription
             
-            logger.info(f"Successfully subscribed to order book for {symbol}")
+            logger.debug(f"Subscribed to order book for {symbol}")
             return True
             
         except Exception as e:
@@ -672,7 +709,7 @@ class HyperLiquidIntegration:
             # Track subscription
             self.subscriptions[f'trades_{symbol}'] = subscription
             
-            logger.info(f"Successfully subscribed to trades for {symbol}")
+            logger.debug(f"Subscribed to trades for {symbol}")
             return True
             
         except Exception as e:
@@ -709,7 +746,7 @@ class HyperLiquidIntegration:
             # Track subscription
             self.subscriptions[f'candle_{symbol}_{interval}'] = subscription
             
-            logger.info(f"Successfully subscribed to {interval} candles for {symbol}")
+            logger.debug(f"Subscribed to {interval} candles for {symbol}")
             return True
             
         except Exception as e:
@@ -1514,13 +1551,13 @@ class HyperLiquidIntegration:
                     await self._trigger_reconnection()
                     break
                 
-                # If we have subscriptions but have never received any messages after 30s, reconnect
+                # If we have subscriptions but have never received any messages after timeout, reconnect
                 elif (self.subscriptions and 
                       not self.last_message_time and 
                       hasattr(self, '_connection_start_time') and
-                      (now - self._connection_start_time).total_seconds() > 30.0):
+                      (now - self._connection_start_time).total_seconds() > self.message_timeout):
                     
-                    logger.warning("No messages received since connection start, triggering reconnection")
+                    logger.warning(f"No messages received for {self.message_timeout}s since connection start, triggering reconnection")
                     await self._trigger_reconnection()
                     break
                     

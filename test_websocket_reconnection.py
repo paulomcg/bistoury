@@ -77,13 +77,14 @@ class ReconnectionTest:
             logger.info(f"⏱️ Message timeout: {stats['message_timeout_seconds']}s")
             
             # Set shorter timeout for testing (default is 30s)
-            self.client.set_message_timeout(15.0)
-            logger.info("⏱️ Set message timeout to 15s for testing")
+            self.client.set_message_timeout(10.0)
+            logger.info("⏱️ Set message timeout to 10s for testing")
             
             logger.info("")
             logger.info("📊 Monitoring WebSocket messages...")
-            logger.info("💡 To test reconnection: disconnect your network for 15+ seconds")
-            logger.info("   You should see 'No messages received' followed by reconnection attempts")
+            logger.info("💡 To test reconnection: disconnect your network for 10+ seconds")
+            logger.info("   You should see reconnection attempts (without spam messages)")
+            logger.info("   Only successful and stable reconnections will be reported")
             logger.info("")
             
             # Monitor messages and connection
