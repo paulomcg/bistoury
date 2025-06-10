@@ -24,6 +24,10 @@ from ..agents.collector_agent import CollectorAgent, CollectorAgentConfig
 from ..agents.candlestick_strategy_agent import CandlestickStrategyAgent, CandlestickStrategyConfig
 from ..agents.position_manager_agent import PositionManagerAgent, PositionManagerConfig
 from ..models.orchestrator_config import OrchestratorConfig
+from ..models.agent_registry import (
+    AgentRegistration, AgentCapability, AgentCapabilityType, 
+    AgentCompatibility, AgentType
+)
 
 console = Console()
 
@@ -80,7 +84,12 @@ async def run_historical_paper_trading(
     
     # Register agents with orchestrator
     for agent in agents:
-        await agent_registry.register_agent(agent)
+        # Convert BaseAgent to AgentRegistration for registry
+        registration = _create_agent_registration(agent)
+        await agent_registry.register_agent(registration)
+        
+        # Set up message bus subscriptions for each agent
+        await _setup_agent_subscriptions(agent, message_bus)
     
     console.print("✅ Components initialized")
     
@@ -280,4 +289,153 @@ async def _generate_session_report(agents: list):
                 
             table.add_row(agent.name, status, metrics)
     
-    console.print(table) 
+    console.print(table)
+
+
+def _create_agent_registration(agent) -> AgentRegistration:
+    """Convert a BaseAgent to an AgentRegistration."""
+    
+    # Create capabilities from agent metadata
+    capabilities = []
+    if hasattr(agent, 'metadata') and hasattr(agent.metadata, 'capabilities'):
+        for cap_str in agent.metadata.capabilities:
+            # Map string capabilities to AgentCapabilityType
+            capability_type = _map_capability_string(cap_str)
+            if capability_type:
+                capabilities.append(AgentCapability(
+                    type=capability_type,
+                    description=f"{cap_str} capability",
+                    version="1.0.0"
+                ))
+    elif hasattr(agent, 'capabilities'):
+        # Handle agents that have capabilities as base.AgentCapability objects
+        for cap in agent.capabilities:
+            if hasattr(cap, 'name'):  # base.AgentCapability
+                capability_type = _map_capability_string(cap.name)
+                if capability_type:
+                    capabilities.append(AgentCapability(
+                        type=capability_type,
+                        description=cap.description,
+                        version=cap.version
+                    ))
+            elif isinstance(cap, str):  # String capability
+                capability_type = _map_capability_string(cap)
+                if capability_type:
+                    capabilities.append(AgentCapability(
+                        type=capability_type,
+                        description=f"{cap} capability",
+                        version="1.0.0"
+                    ))
+    
+    # Create compatibility info
+    compatibility = AgentCompatibility(
+        agent_version="1.0.0",
+        framework_version="1.0.0",
+        python_version="3.9+"
+    )
+    
+    # Map agent type
+    agent_type = AgentType.COLLECTOR
+    if hasattr(agent, 'agent_type'):
+        agent_type = agent.agent_type
+    elif 'strategy' in agent.name.lower():
+        agent_type = AgentType.STRATEGY
+    elif 'position' in agent.name.lower():
+        agent_type = AgentType.TRADER
+    
+    return AgentRegistration(
+        agent_id=agent.agent_id,
+        name=agent.name,
+        agent_type=agent_type,
+        description=getattr(agent.metadata, 'description', f"{agent.name} agent"),
+        capabilities=capabilities,
+        provided_services=[],
+        required_services=[],
+        host="localhost",
+        compatibility=compatibility,
+        configuration=getattr(agent, 'config', {}) if isinstance(getattr(agent, 'config', {}), dict) else {},
+        metadata={
+            "version": getattr(agent.metadata, 'version', '1.0.0'),
+            "dependencies": getattr(agent.metadata, 'dependencies', [])
+        }
+    )
+
+
+def _map_capability_string(cap_str: str) -> Optional[AgentCapabilityType]:
+    """Map capability strings to AgentCapabilityType enum values."""
+    
+    capability_mapping = {
+        "market_data_collection": AgentCapabilityType.DATA_COLLECTION,
+        "real_time_feeds": AgentCapabilityType.DATA_COLLECTION,
+        "historical_data": AgentCapabilityType.DATA_COLLECTION,
+        "database_storage": AgentCapabilityType.DATA_STORAGE,
+        "health_monitoring": AgentCapabilityType.MONITORING,
+        "signal_generation": AgentCapabilityType.SIGNAL_GENERATION,
+        "pattern_recognition": AgentCapabilityType.PATTERN_RECOGNITION,
+        "technical_analysis": AgentCapabilityType.TECHNICAL_ANALYSIS,
+        "candlestick_analysis": AgentCapabilityType.TECHNICAL_ANALYSIS,
+        "position_management": AgentCapabilityType.POSITION_MANAGEMENT,
+        "order_execution": AgentCapabilityType.ORDER_EXECUTION,
+        "risk_management": AgentCapabilityType.RISK_MANAGEMENT
+    }
+    
+    return capability_mapping.get(cap_str)
+
+
+async def _setup_agent_subscriptions(agent, message_bus: MessageBus):
+    """Set up message bus subscriptions for an agent."""
+    from ..agents.messaging import MessageFilter
+    from ..models.agent_messages import MessageType
+    
+    # Skip if agent doesn't have handle_message method
+    if not hasattr(agent, 'handle_message'):
+        return
+    
+    # Subscribe strategy agents to market data
+    if 'strategy' in agent.name.lower():
+        # Subscribe to specific market data topics (e.g., "market_data.BTC.15m")
+        market_data_topics = [
+            "market_data.BTC.1m", "market_data.BTC.5m", "market_data.BTC.15m",
+            "market_data.BTC.1h", "market_data.BTC.4h", "market_data.BTC.1d",
+            "market_data.ETH.1m", "market_data.ETH.5m", "market_data.ETH.15m",
+            "market_data.ETH.1h", "market_data.ETH.4h", "market_data.ETH.1d"
+        ]
+        market_data_filter = MessageFilter(
+            message_types=[MessageType.DATA_MARKET_UPDATE],
+            topics=market_data_topics
+        )
+        
+        await message_bus.subscribe(
+            agent_id=agent.agent_id,
+            filter=market_data_filter,
+            handler=agent.handle_message,
+            is_async=True
+        )
+        
+    # Subscribe position managers to trading signals
+    elif 'position' in agent.name.lower():
+        # Subscribe to trading signals and market data
+        signal_filter = MessageFilter(
+            message_types=[MessageType.SIGNAL_GENERATED, MessageType.DATA_MARKET_UPDATE],
+            topics=["signals.BTC", "signals.ETH", "market_data.BTC.15m", "market_data.ETH.15m"]
+        )
+        
+        await message_bus.subscribe(
+            agent_id=agent.agent_id,
+            filter=signal_filter,
+            handler=agent.handle_message,
+            is_async=True
+        )
+    
+    # All agents should handle system messages
+    system_filter = MessageFilter(
+        message_types=[MessageType.SYSTEM_HEALTH_CHECK, MessageType.SYSTEM_CONFIG_UPDATE],
+        topics=["system.health", "system.config"]
+    )
+    
+    await message_bus.subscribe(
+        agent_id=agent.agent_id,
+        filter=system_filter,
+        handler=agent.handle_message,
+        is_async=True
+    ) 
