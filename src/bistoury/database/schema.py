@@ -683,6 +683,102 @@ class DataInsertion:
         self.db_manager.execute_many(sql, values_list)
         return len(values_list)
 
+    def insert_candles(self, candles: List) -> int:
+        """Insert list of CandlestickData objects."""
+        if not candles:
+            return 0
+        
+        # Group candles by timeframe
+        candles_by_timeframe = {}
+        for candle in candles:
+            # Handle both dict and CandlestickData object
+            if hasattr(candle, 'timeframe'):
+                # CandlestickData object
+                timeframe = candle.timeframe if isinstance(candle.timeframe, str) else candle.timeframe.value
+                symbol = candle.symbol
+                timestamp = candle.timestamp
+                open_price = float(candle.open)
+                high_price = float(candle.high)
+                low_price = float(candle.low)
+                close_price = float(candle.close)
+                volume = float(candle.volume)
+                trade_count = candle.trade_count or 0
+            else:
+                # Dictionary format
+                timeframe = candle['timeframe']
+                symbol = candle['symbol']
+                timestamp = candle['timestamp']
+                open_price = float(candle['open_price'])
+                high_price = float(candle['high_price'])
+                low_price = float(candle['low_price'])
+                close_price = float(candle['close_price'])
+                volume = float(candle['volume'])
+                trade_count = candle.get('trade_count', 0)
+            
+            if timeframe not in candles_by_timeframe:
+                candles_by_timeframe[timeframe] = []
+            
+            # Calculate end timestamp based on timeframe
+            from ..models.market_data import Timeframe as TF
+            tf_enum = TF(timeframe)
+            timestamp_end = datetime.fromtimestamp(
+                timestamp.timestamp() + tf_enum.seconds, 
+                tz=timezone.utc
+            )
+            
+            candles_by_timeframe[timeframe].append({
+                'symbol': symbol,
+                'interval': timeframe,
+                'open_time_ms': int(timestamp.timestamp() * 1000),
+                'close_time_ms': int(timestamp_end.timestamp() * 1000),
+                'timestamp_start': timestamp,
+                'timestamp_end': timestamp_end,
+                'open_price': open_price,
+                'high_price': high_price,
+                'low_price': low_price,
+                'close_price': close_price,
+                'volume': volume,
+                'trade_count': trade_count
+            })
+        
+        # Insert candles for each timeframe
+        total_inserted = 0
+        for timeframe, tf_candles in candles_by_timeframe.items():
+            table_name = f"candles_{timeframe}"
+            
+            sql = f"""
+            INSERT INTO {table_name}
+            (id, symbol, interval, open_time_ms, close_time_ms, timestamp_start, timestamp_end,
+             open_price, close_price, high_price, low_price, volume, trade_count)
+            VALUES (nextval('{table_name}_seq'), ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """
+            
+            # Prepare data for bulk insert
+            values_list = []
+            for candle in tf_candles:
+                values = (
+                    candle['symbol'],
+                    candle['interval'],
+                    candle['open_time_ms'],
+                    candle['close_time_ms'],
+                    candle['timestamp_start'],
+                    candle['timestamp_end'],
+                    candle['open_price'],
+                    candle['close_price'],
+                    candle['high_price'],
+                    candle['low_price'],
+                    candle['volume'],
+                    candle['trade_count']
+                )
+                values_list.append(values)
+            
+            # Execute bulk insert
+            self.db_manager.execute_many(sql, values_list)
+            total_inserted += len(values_list)
+            logger.debug(f"Inserted {len(values_list)} candles into {table_name}")
+        
+        return total_inserted
+
 
 class DataQuery:
     """Handles data querying operations."""

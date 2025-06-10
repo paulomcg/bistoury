@@ -16,27 +16,30 @@ import json
 
 from .config import PaperTradingConfig, TradingMode
 from ..database import DatabaseManager
-from ..agents.position_manager_agent import PositionManagerAgent
-from ..agents.candlestick_strategy_agent import CandlestickStrategyAgent
+from ..agents.position_manager_agent import PositionManagerAgent, PositionManagerConfig
+from ..agents.candlestick_strategy_agent import CandlestickStrategyAgent, CandlestickStrategyConfig
 from ..agents.messaging import MessageBus
 from ..agents.registry import AgentRegistry
 from ..agents.orchestrator import AgentOrchestrator
 from ..signal_manager.signal_manager import SignalManager
 from ..models.market_data import CandlestickData, Timeframe
 from ..models.signals import TradingSignal, SignalDirection
-from ..models.agent_messages import MessageType, MarketDataPayload, TradingSignalPayload
+from ..models.agent_messages import MessageType, MessageFilter, MarketDataPayload, TradingSignalPayload
+from ..config import Config
+from ..signal_manager.models import SignalManagerConfiguration
 
 
 class PaperTradingEngineStatus:
     """Status tracking for paper trading engine"""
     
     def __init__(self):
-        self.is_running = False
+        self.is_running: bool = False
         self.start_time: Optional[datetime] = None
         self.current_time: Optional[datetime] = None
-        self.signals_processed = 0
-        self.trades_executed = 0
-        self.errors = 0
+        self.end_time: Optional[datetime] = None
+        self.signals_processed: int = 0
+        self.trades_executed: int = 0
+        self.errors: int = 0
         self.last_error: Optional[str] = None
         self.components_status: Dict[str, str] = {}
 
@@ -172,7 +175,11 @@ class PaperTradingEngine:
             # Save final state
             await self._save_state()
             
+            # Update status
             self.status.is_running = False
+            self.status.current_time = datetime.now(timezone.utc)
+            self.status.end_time = datetime.now(timezone.utc)
+            
             self.logger.info("Paper Trading Engine stopped gracefully")
             
         except Exception as e:
@@ -181,11 +188,15 @@ class PaperTradingEngine:
     
     async def _initialize_database(self) -> None:
         """Initialize database connection"""
-        db_path = self.config.database_path or "data/bistoury.db"
-        self.db_manager = DatabaseManager(db_path)
-        await self.db_manager.initialize()
+        # Create config with database path
+        config = Config()
+        if self.config.database_path:
+            config.database.path = self.config.database_path
+        
+        self.db_manager = DatabaseManager(config)
+        # DatabaseManager doesn't have async initialize - it's ready on construction
         self.status.components_status["database"] = "initialized"
-        self.logger.info(f"Database initialized: {db_path}")
+        self.logger.info(f"Database initialized: {self.db_manager.db_path}")
     
     async def _initialize_messaging(self) -> None:
         """Initialize messaging infrastructure"""
@@ -197,10 +208,12 @@ class PaperTradingEngine:
         self.logger.info("Messaging infrastructure initialized")
     
     async def _initialize_signal_manager(self) -> None:
-        """Initialize signal manager for signal aggregation"""
-        # Use bootstrap strategy configuration for mathematical signals
+        """Initialize signal manager for aggregating strategy signals"""
+        from ..signal_manager.signal_manager import SignalManager
         from ..signal_manager.models import SignalManagerConfiguration
+        from ..models.agent_messages import MessageFilter, MessageType
         
+        # Create signal manager configuration
         signal_config = SignalManagerConfiguration(
             strategy_weights=self.config.strategy_weights,
             min_confidence=self.config.trading_params.min_confidence,
@@ -210,12 +223,17 @@ class PaperTradingEngine:
         
         self.signal_manager = SignalManager(signal_config)
         
-        # Subscribe to trading signals
+        # Subscribe to trading signals with proper MessageFilter
         if self.message_bus:
+            signal_filter = MessageFilter(
+                message_types=[MessageType.SIGNAL_GENERATED],
+                topics=["signals.*"]
+            )
             await self.message_bus.subscribe(
-                "signals.*", 
-                self._handle_trading_signal,
-                self
+                agent_id="paper_trading_engine", 
+                filter=signal_filter,
+                handler=self._handle_trading_signal,
+                is_async=True
             )
         
         self.status.components_status["signal_manager"] = "initialized"
@@ -226,41 +244,51 @@ class PaperTradingEngine:
         if not self.agent_registry or not self.message_bus:
             raise RuntimeError("Messaging infrastructure not initialized")
         
-        # Initialize Position Manager Agent
-        position_config = {
-            "initial_balance": float(self.config.risk_params.initial_balance),
-            "max_positions": self.config.trading_params.max_concurrent_positions,
-            "default_stop_loss": float(self.config.risk_params.default_stop_loss_percent),
-            "default_take_profit": float(self.config.risk_params.default_take_profit_percent),
-        }
+        from ..models.agent_messages import MessageFilter, MessageType
         
-        self.position_manager = PositionManagerAgent(
-            agent_id="position_manager",
-            config=position_config,
-            message_bus=self.message_bus
+        # Initialize Position Manager Agent
+        position_config = PositionManagerConfig(
+            initial_balance=self.config.risk_params.initial_balance,
+            stop_loss_pct=self.config.risk_params.default_stop_loss_percent,
+            take_profit_pct=self.config.risk_params.default_take_profit_percent,
+            enable_stop_loss=True,
+            enable_take_profit=True
         )
         
-        # Subscribe to position updates
+        self.position_manager = PositionManagerAgent(
+            name="position_manager",
+            config=position_config
+        )
+        
+        # Set message bus for Position Manager Agent
+        self.position_manager._message_bus = self.message_bus
+        
+        # Subscribe to position updates with proper MessageFilter
+        position_filter = MessageFilter(
+            message_types=[MessageType.TRADE_POSITION_UPDATE, MessageType.TRADE_PNL_UPDATE],
+            topics=["positions.*", "trades.*"]
+        )
         await self.message_bus.subscribe(
-            "positions.*",
-            self._handle_position_update,
-            self
+            agent_id="paper_trading_engine",
+            filter=position_filter,
+            handler=self._handle_position_update,
+            is_async=True
         )
         
         # Initialize Candlestick Strategy Agent if enabled
         if "candlestick_strategy" in self.config.enabled_strategies:
-            candlestick_config = {
-                "symbols": self.config.historical_config.symbols if self.config.historical_config else ["BTC"],
-                "timeframes": ["1m", "5m", "15m"],
-                "min_confidence": float(self.config.trading_params.min_confidence),
-                "buffer_size": 1000
-            }
+            candlestick_config = CandlestickStrategyConfig(
+                symbols=self.config.historical_config.symbols if self.config.historical_config else ["BTC"],
+                timeframes=["1m", "5m", "15m"],
+                min_confidence_threshold=float(self.config.trading_params.min_confidence)
+            )
             
             self.candlestick_agent = CandlestickStrategyAgent(
-                agent_id="candlestick_strategy",
-                config=candlestick_config,
-                message_bus=self.message_bus
+                config=candlestick_config
             )
+            
+            # Set message bus for Candlestick Strategy Agent
+            self.candlestick_agent._message_bus = self.message_bus
         
         # Register agents with orchestrator
         if self.position_manager:
@@ -347,15 +375,17 @@ class PaperTradingEngine:
         # Convert timeframe to table name
         timeframe_table = f"candles_{timeframe.value}"
         
-        # Query data from database
+        # Query data from database (using correct field names)
         query = f"""
-        SELECT timestamp, open_price, high_price, low_price, close_price, volume, trade_count
+        SELECT timestamp_start, open_price, high_price, low_price, close_price, volume, trade_count
         FROM {timeframe_table}
-        WHERE symbol = ? AND timestamp BETWEEN ? AND ?
-        ORDER BY timestamp ASC
+        WHERE symbol = ? AND timestamp_start BETWEEN ? AND ?
+        ORDER BY timestamp_start ASC
         """
         
-        async with self.db_manager.get_connection() as conn:
+        # Use sync connection method
+        conn = self.db_manager.get_connection()
+        try:
             cursor = conn.execute(
                 query, 
                 (symbol, self.config.historical_config.start_date, self.config.historical_config.end_date)
@@ -365,24 +395,33 @@ class PaperTradingEngine:
                 if self.shutdown_event.is_set():
                     break
                 
-                # Create candlestick data
+                # Create candlestick data (using correct field names)
+                timestamp = row[0]
+                if isinstance(timestamp, str):
+                    timestamp_dt = datetime.fromisoformat(timestamp.replace('Z', '+00:00'))
+                elif isinstance(timestamp, datetime):
+                    timestamp_dt = timestamp.replace(tzinfo=timezone.utc) if timestamp.tzinfo is None else timestamp
+                else:
+                    # Try to convert to string first
+                    timestamp_dt = datetime.fromisoformat(str(timestamp).replace('Z', '+00:00'))
+                
                 candle_data = CandlestickData(
                     symbol=symbol,
                     timeframe=timeframe,
-                    timestamp=datetime.fromisoformat(row[0]),
-                    open_price=Decimal(str(row[1])),
-                    high_price=Decimal(str(row[2])),
-                    low_price=Decimal(str(row[3])),
-                    close_price=Decimal(str(row[4])),
+                    timestamp=timestamp_dt,
+                    open=Decimal(str(row[1])),
+                    high=Decimal(str(row[2])),
+                    low=Decimal(str(row[3])),
+                    close=Decimal(str(row[4])),
                     volume=Decimal(str(row[5])),
                     trade_count=int(row[6])
                 )
                 
                 # Send market data to candlestick strategy agent
                 if self.message_bus and self.candlestick_agent:
-                    await self.message_bus.publish_message(
-                        message_type=MessageType.MARKET_DATA_UPDATE,
+                    await self.message_bus.publish(
                         topic=f"market_data.{symbol}.{timeframe.value}",
+                        message_type=MessageType.MARKET_DATA_UPDATE,
                         payload=MarketDataPayload(
                             symbol=symbol,
                             timeframe=timeframe.value,
@@ -399,6 +438,13 @@ class PaperTradingEngine:
                 # Simulate replay speed (optional throttling)
                 if self.config.historical_config.replay_speed < 100.0:
                     await asyncio.sleep(0.01 / self.config.historical_config.replay_speed)
+        
+        except Exception as e:
+            self.logger.error(f"Error replaying {symbol} {timeframe.value}: {e}")
+            raise
+        finally:
+            # Don't close connection - DatabaseManager handles pooling
+            pass
     
     async def _handle_trading_signal(self, message) -> None:
         """Handle incoming trading signals from strategy agents"""
@@ -427,9 +473,9 @@ class PaperTradingEngine:
             
             # Send trading signal to position manager
             if self.message_bus and self.position_manager:
-                await self.message_bus.publish_message(
-                    message_type=MessageType.TRADE_SIGNAL,
+                await self.message_bus.publish(
                     topic=f"trades.{payload.symbol}",
+                    message_type=MessageType.TRADE_SIGNAL,
                     payload=TradingSignalPayload(
                         signal_id=getattr(payload, 'signal_id', f"signal_{self.status.signals_processed}"),
                         symbol=payload.symbol,
@@ -582,14 +628,18 @@ class PaperTradingEngine:
     def get_status(self) -> Dict[str, Any]:
         """Get current engine status"""
         return {
+            "mode": self.config.trading_mode.value.upper(),
+            "session_name": self.config.session_name,
             "is_running": self.status.is_running,
             "start_time": self.status.start_time.isoformat() if self.status.start_time else None,
             "current_time": self.status.current_time.isoformat() if self.status.current_time else None,
+            "end_time": self.status.end_time.isoformat() if hasattr(self.status, 'end_time') and self.status.end_time else None,
             "signals_processed": self.status.signals_processed,
             "trades_executed": self.status.trades_executed,
             "errors": self.status.errors,
             "last_error": self.status.last_error,
             "components_status": self.status.components_status,
+            "processed_data_count": self.processed_data_count,
             "performance_stats": {k: float(v) if isinstance(v, Decimal) else v for k, v in self.performance_stats.items()},
             "replay_progress": {
                 "start_time": self.replay_start_time.isoformat() if self.replay_start_time else None,
