@@ -188,8 +188,8 @@ class CandlestickStrategyAgent(BaseAgent):
         self.logger.info(f"Starting CandlestickStrategyAgent {self.agent_id}")
         
         try:
-            # Subscribe to market data topics
-            await self._setup_data_subscriptions()
+            # Skip legacy topic subscriptions - using MessageBus subscriptions instead
+            # await self._setup_data_subscriptions()
             
             # Start background tasks
             await self._start_background_tasks()
@@ -306,16 +306,18 @@ class CandlestickStrategyAgent(BaseAgent):
         """Handle incoming market data updates."""
         payload = message.payload
         
-        # Extract data details
-        data_type = payload.get("data_type")
-        symbol = payload.get("symbol") 
-        timeframe = payload.get("timeframe")
-        
-        if data_type == "candle" and symbol in self.config.symbols:
-            await self._process_candlestick_data(symbol, timeframe, payload)
+        # Extract data details from the MarketDataPayload object
+        # Data is stored in the 'data' dictionary within the payload
+        if hasattr(payload, 'data') and isinstance(payload.data, dict):
+            data_type = payload.data.get("data_type")
+            timeframe = payload.data.get("timeframe")
+            symbol = payload.symbol  # This is a direct attribute
             
-        elif data_type == "volume" and symbol in self.config.symbols:
-            await self._process_volume_data(symbol, payload)
+            if data_type == "candlestick" and symbol in self.config.symbols:
+                await self._process_candlestick_data(symbol, timeframe, payload.data)
+                
+            elif data_type == "volume" and symbol in self.config.symbols:
+                await self._process_volume_data(symbol, payload.data)
             
     async def _process_candlestick_data(self, symbol: str, timeframe: str, payload: Dict[str, Any]):
         """Process new candlestick data and perform pattern analysis."""

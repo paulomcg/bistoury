@@ -1,16 +1,8 @@
 """
-Bistoury Paper Trading System
-
-Mathematical paper trading engine for strategy testing without LLM decision layer.
-Orchestrates data flow between historical data, signal generation, and trade execution.
+Paper trading module for Bistoury.
+Provides functionality for backtesting and paper trading with historical data.
 """
 
-from .engine import PaperTradingEngine
-from .config import PaperTradingConfig, TradingParameters, RiskParameters
+from .session import run_historical_paper_trading
 
-__all__ = [
-    "PaperTradingEngine",
-    "PaperTradingConfig", 
-    "TradingParameters",
-    "RiskParameters",
-] 
+__all__ = ['run_historical_paper_trading'] 

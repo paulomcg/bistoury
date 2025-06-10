@@ -13,12 +13,13 @@ from dataclasses import dataclass, field
 
 from ..hyperliquid.collector import EnhancedDataCollector, CollectorConfig
 from ..hyperliquid.client import HyperLiquidIntegration
-from ..database import DatabaseManager
+from ..database import DatabaseManager, get_database_switcher
 from ..logger import get_logger
 from ..models.agent_messages import (
     Message, MessageType, MessagePriority, MarketDataPayload,
     SystemEventPayload
 )
+from ..models.market_data import CandlestickData, Timeframe
 from .base import BaseAgent, AgentType, AgentState, AgentHealth
 
 logger = get_logger(__name__)
@@ -51,6 +52,12 @@ class CollectorAgentConfig:
     publish_data_updates: bool = True
     publish_stats_updates: bool = True
     data_update_interval: float = 5.0
+    
+    # Historical replay mode (for paper trading)
+    historical_replay_mode: bool = False
+    replay_start_date: Optional[datetime] = None
+    replay_end_date: Optional[datetime] = None
+    replay_speed: float = 1.0  # 1.0 = real-time, 100.0 = 100x speed
 
 
 class CollectorAgent(BaseAgent):
@@ -153,27 +160,44 @@ class CollectorAgent(BaseAgent):
         try:
             self.logger.info("Starting CollectorAgent...")
             
-            # Start the enhanced data collector
-            if not await self.collector.start():
-                self.logger.error("Failed to start EnhancedDataCollector")
-                return False
+            if self.collector_config.historical_replay_mode:
+                # Historical replay mode for paper trading
+                self.logger.info(f"Starting in historical replay mode: {self.collector_config.replay_speed}x speed")
+                
+                # Start historical replay task
+                self.create_task(self._historical_replay_loop())
+                
+                # Start background tasks (but not the live collector)
+                self.create_task(self._monitor_collector_health())
+                if self.collector_config.publish_data_updates:
+                    self.create_task(self._publish_data_updates())
+                if self.collector_config.publish_stats_updates:
+                    self.create_task(self._publish_stats_updates())
+                
+            else:
+                # Live collection mode  
+                # Start the enhanced data collector
+                if not await self.collector.start():
+                    self.logger.error("Failed to start EnhancedDataCollector")
+                    return False
+                
+                # Start background tasks
+                self.create_task(self._monitor_collector_health())
+                self.create_task(self._publish_data_updates())
+                self.create_task(self._publish_stats_updates())
+                
+                # Collect historical data if configured
+                if self.collector_config.collect_historical_on_start:
+                    self.create_task(self._collect_initial_historical_data())
             
             self._collection_start_time = datetime.now(timezone.utc)
             
-            # Start background tasks
-            self.create_task(self._monitor_collector_health())
-            self.create_task(self._publish_data_updates())
-            self.create_task(self._publish_stats_updates())
-            
-            # Collect historical data if configured
-            if self.collector_config.collect_historical_on_start:
-                self.create_task(self._collect_initial_historical_data())
-            
             # Send startup notification
             if self._message_bus:
+                mode = "historical_replay" if self.collector_config.historical_replay_mode else "live"
                 await self._send_system_message(
                     MessageType.AGENT_STARTED,
-                    f"CollectorAgent started with {len(self.collector_config.symbols)} symbols"
+                    f"CollectorAgent started in {mode} mode with {len(self.collector_config.symbols)} symbols"
                 )
             
             self.logger.info("CollectorAgent started successfully")
@@ -188,8 +212,9 @@ class CollectorAgent(BaseAgent):
         try:
             self.logger.info("Stopping CollectorAgent...")
             
-            # Stop the enhanced data collector
-            await self.collector.stop()
+            if not self.collector_config.historical_replay_mode:
+                # Only stop the live collector if we're not in historical mode
+                await self.collector.stop()
             
             # Send shutdown notification
             if self._message_bus:
@@ -324,7 +349,7 @@ class CollectorAgent(BaseAgent):
                         payload=payload
                     )
                     
-                    await self._message_bus.publish(message)
+                    await self._message_bus.send_message(message)
                     self._last_data_publish = current_time
                 
                 await asyncio.sleep(1.0)  # Check every second
@@ -370,7 +395,7 @@ class CollectorAgent(BaseAgent):
                     payload=payload
                 )
                 
-                await self._message_bus.publish(message)
+                await self._message_bus.send_message(message)
                 
             except Exception as e:
                 self.logger.error(f"Error publishing stats updates: {e}")
@@ -430,7 +455,7 @@ class CollectorAgent(BaseAgent):
                 payload=payload
             )
             
-            await self._message_bus.publish(message)
+            await self._message_bus.send_message(message)
             
         except Exception as e:
             self.logger.error(f"Error sending system message: {e}")
@@ -531,4 +556,147 @@ class CollectorAgent(BaseAgent):
     def set_message_bus(self, message_bus) -> None:
         """Set the message bus for communication."""
         self._message_bus = message_bus
-        self.logger.info("Message bus connected to CollectorAgent") 
+        self.logger.info("Message bus connected to CollectorAgent")
+    
+    async def _historical_replay_loop(self) -> None:
+        """Replay historical candle data from database at specified speed."""
+        try:
+            # Get database manager - switch_to_database returns DatabaseManager directly
+            switcher = get_database_switcher()
+            db_manager = switcher.switch_to_database('production')  # Returns DatabaseManager instance
+            conn = db_manager.get_connection()
+            
+            self.logger.info(f"Starting historical replay from {self.collector_config.replay_start_date} to {self.collector_config.replay_end_date}")
+            
+            # Process each symbol and timeframe
+            for symbol in self.collector_config.symbols:
+                for interval in self.collector_config.intervals:
+                    
+                    # Map interval string to Timeframe enum
+                    timeframe_mapping = {
+                        "1m": Timeframe.ONE_MINUTE,
+                        "5m": Timeframe.FIVE_MINUTES, 
+                        "15m": Timeframe.FIFTEEN_MINUTES,
+                        "1h": Timeframe.ONE_HOUR,
+                        "4h": Timeframe.FOUR_HOURS,
+                        "1d": Timeframe.ONE_DAY
+                    }
+                    
+                    if interval not in timeframe_mapping:
+                        continue
+                        
+                    timeframe = timeframe_mapping[interval]
+                    
+                    # Query historical candle data
+                    table_name = f"candles_{interval}"
+                    
+                    query = f"""
+                    SELECT timestamp_start, open_price, high_price, low_price, close_price, volume, trade_count
+                    FROM {table_name}
+                    WHERE symbol = ? 
+                    """
+                    
+                    params = [symbol]
+                    
+                    if self.collector_config.replay_start_date:
+                        query += " AND timestamp_start >= ?"
+                        params.append(self.collector_config.replay_start_date)
+                        
+                    if self.collector_config.replay_end_date:
+                        query += " AND timestamp_start <= ?"
+                        params.append(self.collector_config.replay_end_date)
+                        
+                    query += " ORDER BY timestamp_start ASC"
+                    
+                    try:
+                        cursor = conn.execute(query, params)
+                        rows = cursor.fetchall()
+                        
+                        self.logger.info(f"Found {len(rows)} candles for {symbol} {interval}")
+                        
+                        for row in rows:
+                            if self._stop_event.is_set():
+                                return
+                                
+                            # Create candlestick data
+                            timestamp = row[0]
+                            if isinstance(timestamp, str):
+                                timestamp_dt = datetime.fromisoformat(timestamp.replace('Z', '+00:00'))
+                            elif isinstance(timestamp, datetime):
+                                timestamp_dt = timestamp.replace(tzinfo=timezone.utc) if timestamp.tzinfo is None else timestamp
+                            else:
+                                timestamp_dt = datetime.fromisoformat(str(timestamp).replace('Z', '+00:00'))
+                            
+                            candle_data = CandlestickData(
+                                symbol=symbol,
+                                timeframe=timeframe,
+                                timestamp=timestamp_dt,
+                                open=float(row[1]),
+                                high=float(row[2]),
+                                low=float(row[3]),
+                                close=float(row[4]),
+                                volume=float(row[5]),
+                                trade_count=int(row[6])
+                            )
+                            
+                            # Publish candle data via message bus
+                            await self._publish_candle_data(symbol, interval, candle_data)
+                            
+                            # Sleep based on replay speed (simulate time between candles)
+                            if self.collector_config.replay_speed > 0:
+                                # Calculate delay: 15m interval = 900 seconds real time
+                                interval_seconds = {
+                                    "1m": 60,
+                                    "5m": 300, 
+                                    "15m": 900,
+                                    "1h": 3600,
+                                    "4h": 14400,
+                                    "1d": 86400
+                                }.get(interval, 900)
+                                
+                                # Apply replay speed (higher speed = shorter delay)
+                                delay = interval_seconds / self.collector_config.replay_speed
+                                await asyncio.sleep(delay)
+                                
+                    except Exception as e:
+                        self.logger.error(f"Error replaying {symbol} {interval}: {e}")
+                        
+            self.logger.info("Historical replay completed")
+            
+        except Exception as e:
+            self.logger.error(f"Error in historical replay loop: {e}")
+    
+    async def _publish_candle_data(self, symbol: str, interval: str, candle_data: CandlestickData) -> None:
+        """Publish candle data via message bus."""
+        if not self._message_bus:
+            return
+            
+        try:
+            # Create market data payload
+            payload = MarketDataPayload(
+                symbol=symbol,
+                price=candle_data.close,
+                volume=candle_data.volume,
+                timestamp=candle_data.timestamp,
+                source="collector_agent_historical",
+                data={
+                    "timeframe": interval,
+                    "data_type": "candlestick",
+                    "candle_data": candle_data.model_dump()
+                }
+            )
+            
+            # Publish to topic that strategy agents expect
+            topic = f"market_data.{symbol}.{interval}"
+            
+            # Use publish() method instead of send_message()
+            await self._message_bus.publish(
+                topic=topic,
+                message_type=MessageType.DATA_MARKET_UPDATE,
+                payload=payload,
+                sender=self.name,
+                priority=MessagePriority.NORMAL
+            )
+            
+        except Exception as e:
+            self.logger.error(f"Error publishing candle data: {e}") 

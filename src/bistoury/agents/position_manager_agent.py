@@ -20,7 +20,7 @@ from uuid import uuid4
 from pydantic import BaseModel
 from dataclasses import dataclass
 
-from .base import BaseAgent, AgentType, AgentState
+from .base import BaseAgent, AgentType, AgentState, AgentHealth
 from ..models.trading import (
     Position, PositionSide, Order, OrderType, OrderStatus, OrderSide,
     TradeExecution, PortfolioState, RiskParameters, TimeInForce
@@ -416,18 +416,56 @@ class PositionManagerAgent(BaseAgent):
         except Exception as e:
             self.logger.error(f"Error stopping Position Manager: {e}", exc_info=True)
     
-    async def _health_check(self) -> None:
-        """Perform health check."""
+    async def _health_check(self) -> AgentHealth:
+        """Perform health check and return health data."""
         try:
             healthy = (
                 self.portfolio.total_balance > 0 and
                 len(self.positions) <= 10
             )
-            self.health.health_score = 1.0 if healthy else 0.5
-            self.health.messages_processed = self.total_trades
+            
+            health_score = 1.0 if healthy else 0.5
+            
+            # Create and return AgentHealth object
+            return AgentHealth(
+                state=self.state,
+                last_heartbeat=datetime.now(timezone.utc),
+                cpu_usage=0.0,  # Could be implemented with psutil
+                memory_usage=0.0,  # Could be implemented with psutil
+                error_count=0,
+                warning_count=0,
+                messages_processed=self.total_trades,
+                tasks_completed=self.total_trades,
+                uptime_seconds=self.uptime,
+                health_score=health_score,
+                last_error=None,
+                last_error_time=None
+            )
         except Exception as e:
             self.logger.error(f"Health check failed: {e}", exc_info=True)
-            self.health.health_score = 0.0
+            return AgentHealth(
+                state=self.state,
+                health_score=0.0,
+                last_error=str(e),
+                last_error_time=datetime.now(timezone.utc),
+                error_count=1
+            )
+    
+    async def handle_message(self, message: Message) -> None:
+        """Handle incoming messages from the message bus."""
+        try:
+            if message.type == MessageType.SIGNAL_GENERATED:
+                await self._handle_trading_signal(message)
+            elif message.type in [MessageType.DATA_MARKET_UPDATE, MessageType.DATA_PRICE_UPDATE]:
+                await self._handle_market_data(message)
+            elif message.type == MessageType.SYSTEM_HEALTH_CHECK:
+                # Respond to health check requests
+                health = await self.get_health()
+                # Could publish health response here if needed
+            else:
+                self.logger.debug(f"Unhandled message type: {message.type}")
+        except Exception as e:
+            self.logger.error(f"Error handling message: {e}", exc_info=True)
     
     async def _setup_subscriptions(self) -> None:
         """Set up message subscriptions."""

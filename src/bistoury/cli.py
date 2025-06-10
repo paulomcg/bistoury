@@ -142,29 +142,91 @@ def status(ctx: click.Context) -> None:
     "--mode",
     "-m",
     type=click.Choice(["historical", "live"]),
-    default="live",
+    default="historical",
     help="Paper trading mode"
+)
+@click.option(
+    "--symbol",
+    "-s",
+    default="BTC",
+    help="Trading symbol"
+)
+@click.option(
+    "--timeframe",
+    "-t",
+    type=click.Choice(['1m', '5m', '15m', '1h', '4h', '1d']),
+    default="15m",
+    help="Timeframe for analysis"
 )
 @click.option(
     "--duration",
     "-d",
-    help="Trading duration (e.g., '24h', '1d', '1w')"
+    type=int,
+    default=60,
+    help="Trading duration in seconds"
+)
+@click.option(
+    "--balance",
+    type=float,
+    default=10000.0,
+    help="Initial balance in USD"
+)
+@click.option(
+    "--speed",
+    type=float,
+    default=100.0,
+    help="Replay speed multiplier (historical mode only)"
+)
+@click.option(
+    "--min-confidence",
+    type=float,
+    default=0.5,
+    help="Minimum signal confidence"
 )
 @click.pass_context
-def paper_trade(ctx: click.Context, mode: str, duration: Optional[str]) -> None:
+def paper_trade(ctx: click.Context, mode: str, symbol: str, timeframe: str, 
+                duration: int, balance: float, speed: float, min_confidence: float) -> None:
     """Start paper trading (no real money)."""
     config: Config = ctx.obj["config"]
     logger = ctx.obj["logger"]
     
+    if mode == "live":
+        click.echo("⚠️  Live paper trading not yet implemented")
+        return
+    
+    # Import here to avoid circular imports
+    import asyncio
+    from .paper_trading.session import run_historical_paper_trading
+    
     click.echo(f"📊 Starting paper trading")
     click.echo(f"🎯 Mode: {mode}")
-    if duration:
-        click.echo(f"⏰ Duration: {duration}")
+    click.echo(f"💰 Symbol: {symbol}")
+    click.echo(f"📈 Timeframe: {timeframe}")
+    click.echo(f"💵 Balance: ${balance:,.2f}")
+    click.echo(f"⏱️  Duration: {duration}s")
+    if mode == "historical":
+        click.echo(f"⚡ Speed: {speed}x")
     
-    logger.info(f"Paper trading started: mode={mode}, duration={duration}")
+    logger.info(f"Paper trading started: mode={mode}, symbol={symbol}, duration={duration}")
     
-    # TODO: Implement paper trading
-    click.echo("⚠️  Paper trading not yet implemented")
+    try:
+        # Run the paper trading session
+        asyncio.run(run_historical_paper_trading(
+            symbol=symbol,
+            timeframe=timeframe,
+            duration=duration,
+            balance=balance,
+            speed=speed,
+            min_confidence=min_confidence,
+            config=config,
+            logger=logger
+        ))
+    except KeyboardInterrupt:
+        click.echo("\n🛑 Paper trading interrupted by user")
+    except Exception as e:
+        click.echo(f"\n❌ Paper trading failed: {e}")
+        logger.error(f"Paper trading error: {e}")
+        sys.exit(1)
 
 
 @main.command()
