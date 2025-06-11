@@ -3,18 +3,22 @@ Centralized Configuration Manager
 
 Manages all configuration files in the config/ directory and provides
 a unified interface for accessing configuration parameters throughout
-the application.
+the application. Now integrated with Pydantic config for a hybrid approach.
 """
 
 import json
 import logging
 from pathlib import Path
-from typing import Dict, Any, Optional, Union
+from typing import Dict, Any, Optional, Union, Type, TypeVar
 from dataclasses import dataclass, field
 from decimal import Decimal
+import os
 
+from .config import Config
 
 logger = logging.getLogger(__name__)
+
+T = TypeVar('T')
 
 
 @dataclass
@@ -48,6 +52,11 @@ class ConfigPaths:
     def trading_config(self) -> Path:
         """Trading configuration file."""
         return self.config_dir / "trading.json"
+    
+    @property
+    def index_config(self) -> Path:
+        """Index configuration file."""
+        return self.config_dir / "index.json"
 
 
 class ConfigManager:
@@ -55,19 +64,24 @@ class ConfigManager:
     Centralized configuration manager.
     
     Provides unified access to all configuration parameters across
-    pattern detection, strategy, agents, and trading configurations.
+    pattern detection, strategy, agents, trading configurations, and
+    integrates with the Pydantic config system for infrastructure settings.
     """
     
-    def __init__(self, config_dir: Optional[Path] = None):
+    def __init__(self, config_dir: Optional[Path] = None, base_config: Optional[Config] = None):
         """
         Initialize configuration manager.
         
         Args:
             config_dir: Optional custom config directory path
+            base_config: Optional Pydantic config instance for infrastructure settings
         """
         self.paths = ConfigPaths()
         if config_dir:
             self.paths.config_dir = config_dir
+        
+        # Integration with Pydantic config system
+        self.base_config = base_config or Config.load_from_env()
         
         self._configs: Dict[str, Dict[str, Any]] = {}
         self._load_all_configs()
@@ -78,7 +92,8 @@ class ConfigManager:
             'pattern_detection': self.paths.pattern_detection_config,
             'strategy': self.paths.strategy_config,
             'agents': self.paths.agents_config,
-            'trading': self.paths.trading_config
+            'trading': self.paths.trading_config,
+            'index': self.paths.index_config
         }
         
         for config_name, config_path in config_files.items():
@@ -110,7 +125,7 @@ class ConfigManager:
         Get configuration value using dot notation.
         
         Args:
-            config_type: Configuration type ('pattern_detection', 'strategy', 'agents', 'trading')
+            config_type: Configuration type ('pattern_detection', 'strategy', 'agents', 'trading', 'base')
             *keys: Configuration keys (e.g., 'timeframe_analysis', 'primary_timeframe')
             default: Default value if key not found
             
@@ -123,7 +138,14 @@ class ConfigManager:
             
             # Get pattern_detection.engulfing.min_engulfing_ratio
             config.get('pattern_detection', 'engulfing', 'min_engulfing_ratio')
+            
+            # Get base config (from Pydantic system)
+            config.get('base', 'trading', 'default_position_size_pct')
         """
+        # Handle base config (Pydantic system)
+        if config_type == 'base':
+            return self._get_base_config(*keys, default=default)
+        
         if config_type not in self._configs:
             logger.warning(f"Unknown config type: {config_type}")
             return default
@@ -138,8 +160,20 @@ class ConfigManager:
         
         return value
     
+    def _get_base_config(self, *keys: str, default: Any = None) -> Any:
+        """Get value from Pydantic base config using dot notation."""
+        value = self.base_config
+        
+        for key in keys:
+            if hasattr(value, key):
+                value = getattr(value, key)
+            else:
+                return default
+        
+        return value
+    
     def get_decimal(self, config_type: str, *keys: str, default: Union[str, float, Decimal] = "0") -> Decimal:
-        """Get configuration value as Decimal."""
+        """Get configuration value as Decimal (important for trading calculations)."""
         value = self.get(config_type, *keys, default=default)
         
         try:
@@ -204,13 +238,17 @@ class ConfigManager:
     
     def set(self, config_type: str, keys: list, value: Any) -> None:
         """
-        Set configuration value (runtime only, not persisted).
+        Set configuration value (runtime only, not persisted unless saved).
         
         Args:
-            config_type: Configuration type
+            config_type: Configuration type (not 'base' - base config is immutable)
             keys: List of keys for nested access
             value: Value to set
         """
+        if config_type == 'base':
+            logger.warning("Cannot modify base config at runtime")
+            return
+            
         if config_type not in self._configs:
             self._configs[config_type] = {}
         
@@ -233,32 +271,45 @@ class ConfigManager:
         Args:
             config_type: Specific config type to reload, or None for all
         """
+        if config_type == 'base':
+            # Reload base config from environment
+            self.base_config = Config.load_from_env()
+            logger.info("Reloaded base configuration from environment")
+            return
+            
         if config_type:
-            if config_type == 'pattern_detection':
-                self._configs[config_type] = self._load_config_file(self.paths.pattern_detection_config)
-            elif config_type == 'strategy':
-                self._configs[config_type] = self._load_config_file(self.paths.strategy_config)
-            elif config_type == 'agents':
-                self._configs[config_type] = self._load_config_file(self.paths.agents_config)
-            elif config_type == 'trading':
-                self._configs[config_type] = self._load_config_file(self.paths.trading_config)
+            config_file_map = {
+                'pattern_detection': self.paths.pattern_detection_config,
+                'strategy': self.paths.strategy_config,
+                'agents': self.paths.agents_config,
+                'trading': self.paths.trading_config,
+                'index': self.paths.index_config
+            }
+            
+            if config_type in config_file_map:
+                self._configs[config_type] = self._load_config_file(config_file_map[config_type])
+                logger.info(f"Reloaded {config_type} configuration")
             else:
                 logger.warning(f"Unknown config type: {config_type}")
         else:
             self._load_all_configs()
-        
-        logger.info(f"Reloaded configuration: {config_type or 'all'}")
+            self.base_config = Config.load_from_env()
+            logger.info("Reloaded all configurations")
     
     def save(self, config_type: str) -> bool:
         """
         Save configuration to file.
         
         Args:
-            config_type: Configuration type to save
+            config_type: Configuration type to save (not 'base')
             
         Returns:
             True if successful, False otherwise
         """
+        if config_type == 'base':
+            logger.warning("Cannot save base config - it's loaded from environment")
+            return False
+            
         if config_type not in self._configs:
             logger.error(f"Cannot save unknown config type: {config_type}")
             return False
@@ -267,7 +318,8 @@ class ConfigManager:
             'pattern_detection': self.paths.pattern_detection_config,
             'strategy': self.paths.strategy_config,
             'agents': self.paths.agents_config,
-            'trading': self.paths.trading_config
+            'trading': self.paths.trading_config,
+            'index': self.paths.index_config
         }
         
         if config_type not in config_files:
@@ -292,8 +344,18 @@ class ConfigManager:
             return False
     
     def list_configs(self) -> Dict[str, Dict[str, Any]]:
-        """Get all loaded configurations."""
+        """Get all loaded configurations (excluding base config)."""
         return self._configs.copy()
+    
+    def get_base_config_summary(self) -> Dict[str, Any]:
+        """Get a summary of base (Pydantic) configuration."""
+        return {
+            'environment': self.base_config.environment,
+            'debug': self.base_config.debug,
+            'trading_mode': self.base_config.trading.mode,
+            'database_path': self.base_config.database.path,
+            'available_llm_providers': self.base_config.get_available_llm_providers()
+        }
     
     def validate_config(self, config_type: str) -> Dict[str, list]:
         """
@@ -307,6 +369,20 @@ class ConfigManager:
         """
         errors = []
         warnings = []
+        
+        if config_type == 'base':
+            # Validate base config
+            try:
+                if not self.base_config.validate_llm_keys():
+                    warnings.append("No LLM API keys configured")
+                
+                if self.base_config.trading.mode == "live":
+                    self.base_config.validate_for_trading()
+                    
+            except Exception as e:
+                errors.append(f"Base config validation failed: {e}")
+                
+            return {'errors': errors, 'warnings': warnings}
         
         if config_type not in self._configs:
             errors.append(f"Configuration type '{config_type}' not loaded")
@@ -324,17 +400,24 @@ class ConfigManager:
                 
                 if 'data_quality_threshold' in tf_config:
                     threshold = tf_config['data_quality_threshold']
-                    if not (0 <= threshold <= 100):
-                        errors.append(f"data_quality_threshold must be 0-100, got {threshold}")
+                    try:
+                        threshold_val = float(threshold)
+                        if not (0 <= threshold_val <= 100):
+                            errors.append(f"data_quality_threshold must be 0-100, got {threshold}")
+                    except (ValueError, TypeError):
+                        errors.append(f"data_quality_threshold must be a number, got {threshold}")
             
             if 'pattern_detection' in config:
                 pd_config = config['pattern_detection']
                 
                 for key in ['min_pattern_confidence', 'min_confluence_score', 'min_quality_score']:
                     if key in pd_config:
-                        value = pd_config[key]
-                        if not (0 <= value <= 100):
-                            errors.append(f"{key} must be 0-100, got {value}")
+                        try:
+                            value = float(pd_config[key])
+                            if not (0 <= value <= 100):
+                                errors.append(f"{key} must be 0-100, got {value}")
+                        except (ValueError, TypeError):
+                            errors.append(f"{key} must be a number, got {pd_config[key]}")
         
         elif config_type == 'pattern_detection':
             # Validate pattern detection configuration
@@ -343,6 +426,16 @@ class ConfigManager:
             for pattern in required_patterns:
                 if pattern not in config:
                     warnings.append(f"Missing configuration for pattern: {pattern}")
+                    
+            # Validate decimal values
+            for pattern_name, pattern_config in config.items():
+                if isinstance(pattern_config, dict):
+                    for param_name, param_value in pattern_config.items():
+                        if isinstance(param_value, str):
+                            try:
+                                Decimal(param_value)
+                            except:
+                                warnings.append(f"Invalid decimal value for {pattern_name}.{param_name}: {param_value}")
         
         return {'errors': errors, 'warnings': warnings}
 
@@ -359,6 +452,12 @@ def get_config_manager() -> ConfigManager:
         _config_manager = ConfigManager()
     
     return _config_manager
+
+
+def reset_config_manager():
+    """Reset the global configuration manager (useful for testing)."""
+    global _config_manager
+    _config_manager = None
 
 
 # Convenience functions for easy access
@@ -384,4 +483,9 @@ def get_agent_config(agent_name: str, *keys: str, default: Any = None) -> Any:
 
 def get_trading_config(*keys: str, default: Any = None) -> Any:
     """Convenience function to get trading configuration."""
-    return get_config_manager().get('trading', *keys, default=default) 
+    return get_config_manager().get('trading', *keys, default=default)
+
+
+def get_base_config(*keys: str, default: Any = None) -> Any:
+    """Convenience function to get base (Pydantic) configuration."""
+    return get_config_manager().get('base', *keys, default=default) 

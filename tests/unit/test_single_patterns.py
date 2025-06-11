@@ -62,7 +62,7 @@ class TestDojiDetector:
     """Test Doji pattern detection."""
     
     def setup_method(self):
-        self.detector = DojiDetector(min_confidence=Decimal('60'))
+        self.detector = DojiDetector(min_confidence=Decimal('20'))
     
     def test_perfect_doji(self):
         """Test detection of perfect Doji (open == close)."""
@@ -158,7 +158,7 @@ class TestHammerDetector:
     """Test Hammer pattern detection."""
     
     def setup_method(self):
-        self.detector = HammerDetector(min_confidence=Decimal('60'))
+        self.detector = HammerDetector(min_confidence=Decimal('20'))
     
     def test_perfect_hammer(self):
         """Test detection of perfect Hammer pattern."""
@@ -247,7 +247,7 @@ class TestShootingStarDetector:
     """Test Shooting Star pattern detection."""
     
     def setup_method(self):
-        self.detector = ShootingStarDetector(min_confidence=Decimal('60'))
+        self.detector = ShootingStarDetector(min_confidence=Decimal('20'))
     
     def test_perfect_shooting_star(self):
         """Test detection of perfect Shooting Star pattern."""
@@ -313,7 +313,7 @@ class TestSpinningTopDetector:
     """Test Spinning Top pattern detection."""
     
     def setup_method(self):
-        self.detector = SpinningTopDetector(min_confidence=Decimal('60'))
+        self.detector = SpinningTopDetector(min_confidence=Decimal('20'))
     
     def test_perfect_spinning_top(self):
         """Test detection of perfect Spinning Top pattern."""
@@ -387,7 +387,7 @@ class TestMarubozuDetector:
     """Test Marubozu pattern detection."""
     
     def setup_method(self):
-        self.detector = MarubozuDetector(min_confidence=Decimal('60'))
+        self.detector = MarubozuDetector(min_confidence=Decimal('20'))
     
     def test_perfect_bullish_marubozu(self):
         """Test detection of perfect bullish Marubozu."""

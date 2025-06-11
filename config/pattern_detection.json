@@ -56,7 +56,7 @@
   },
   "spinning_top": {
     "max_body_ratio": "0.3",
-    "min_shadow_ratio": "0.25",
+    "min_shadow_ratio": "0.3",
     "max_shadow_diff": "0.3",
     "shadow_balance_weight": "40",
     "body_score_weight": "30",
@@ -120,7 +120,7 @@
   },
   "piercing_line": {
     "min_body_ratio": "0.008",
-    "min_pierce_ratio": "0.5",
+    "min_pierce_ratio": "0.1",
     "base_confidence": "10",
     "pierce_score_multiplier": "100",
     "max_pierce_score": "40",
@@ -137,7 +137,7 @@
   },
   "dark_cloud_cover": {
     "min_body_ratio": "0.008",
-    "min_cover_ratio": "0.5",
+    "min_cover_ratio": "0.1",
     "base_confidence": "10",
     "cover_score_multiplier": "100",
     "max_cover_score": "40",

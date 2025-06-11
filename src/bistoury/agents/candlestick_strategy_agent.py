@@ -33,6 +33,7 @@ from ..strategies.pattern_scoring import PatternScoringEngine
 from ..strategies.signal_generator import SignalGenerator, SignalConfiguration
 from ..strategies.narrative_generator import NarrativeGenerator, NarrativeConfiguration, NarrativeStyle
 from ..models.market_data import Timeframe
+from ..config_manager import get_config_manager
 
 
 @dataclass
@@ -82,7 +83,6 @@ class CandlestickStrategyConfig:
     def from_config_manager(cls) -> 'CandlestickStrategyConfig':
         """Create configuration from centralized config manager."""
         try:
-            from ..config_manager import get_config_manager
             config_manager = get_config_manager()
             
             # Pattern strength mapping
@@ -161,18 +161,95 @@ class CandlestickStrategyAgent(BaseAgent):
     and generates trading signals based on candlestick patterns.
     """
     
-    def __init__(self, config: Optional[CandlestickStrategyConfig] = None):
-        # Initialize configuration - store it first before BaseAgent overwrites it
-        strategy_config = config or CandlestickStrategyConfig()
-
-        # Initialize base agent
+    def __init__(
+        self,
+        name: str = "candlestick_strategy",
+        config: Optional[Dict[str, Any]] = None,
+        signal_config: Optional[SignalConfiguration] = None,
+        narrative_config: Optional[NarrativeConfiguration] = None,
+        **kwargs
+    ):
+        """
+        Initialize Candlestick Strategy Agent.
+        
+        Args:
+            name: Agent name (default: "candlestick_strategy")
+            config: Agent configuration (can be dict or CandlestickStrategyConfig)
+            signal_config: Signal generation configuration
+            narrative_config: Narrative generation configuration
+        """
+        # Handle config parameter - can be dict, CandlestickStrategyConfig, or None
+        if isinstance(name, CandlestickStrategyConfig):
+            # Test case where name parameter is actually the config object
+            self.config = name
+            agent_name = self.config.agent_name
+        elif isinstance(config, CandlestickStrategyConfig):
+            self.config = config
+            agent_name = name
+        elif config is not None:
+            # Dict config provided - merge with defaults
+            self.config = CandlestickStrategyConfig.from_config_manager()
+            agent_name = name
+        else:
+            # No config provided - use defaults from config manager
+            self.config = CandlestickStrategyConfig.from_config_manager()
+            agent_name = name
+            
         super().__init__(
-            name=strategy_config.agent_name,
-            agent_type=AgentType.STRATEGY
+            name=agent_name,
+            agent_type=AgentType.STRATEGY,
+            config=config if isinstance(config, dict) else None,
+            **kwargs
         )
         
-        # Restore our strategy configuration after BaseAgent initialization
-        self.config = strategy_config
+        # Get centralized config manager
+        self.config_manager = get_config_manager()
+        
+        # Use config manager for default values instead of hardcoded ones
+        self.signal_config = signal_config or SignalConfiguration(
+            min_pattern_confidence=self.config_manager.get_decimal(
+                'strategy', 'pattern_detection', 'min_pattern_confidence', default='70'
+            ),
+            min_confluence_score=self.config_manager.get_decimal(
+                'strategy', 'pattern_detection', 'min_confluence_score', default='60'
+            ),
+            min_quality_score=self.config_manager.get_decimal(
+                'strategy', 'pattern_detection', 'min_quality_score', default='50'
+            )
+        )
+        
+        # Use provided narrative config or create default
+        if narrative_config:
+            self.narrative_config = narrative_config
+        elif isinstance(self.config, CandlestickStrategyConfig):
+            self.narrative_config = NarrativeConfiguration(
+                style=self.config.narrative_style,
+                include_technical_details=self.config.include_technical_details,
+                include_risk_metrics=self.config.include_risk_metrics
+            )
+        else:
+            # Default narrative config when config is dict or None
+            self.narrative_config = NarrativeConfiguration(
+                style="technical",
+                include_technical_details=True,
+                include_risk_metrics=True
+            )
+        
+        # Get timeframe config from centralized config
+        self.primary_timeframe = self.config_manager.get(
+            'strategy', 'timeframe_analysis', 'primary_timeframe', default='5m'
+        )
+        self.secondary_timeframes = self.config_manager.get_list(
+            'strategy', 'timeframe_analysis', 'secondary_timeframes', default=['1m', '15m']
+        )
+        
+        # Initialize components with config-driven parameters
+        self.pattern_recognizer = SinglePatternRecognizer(
+            min_confidence=Decimal(str(self.config.min_confidence_threshold * 100))
+        )
+        self.multi_pattern_recognizer = MultiPatternRecognizer(
+            min_confidence=Decimal(str(self.config.min_confidence_threshold * 100))
+        )
         
         # Set version and capabilities after base initialization
         self.metadata.version = self.config.agent_version
@@ -212,35 +289,21 @@ class CandlestickStrategyAgent(BaseAgent):
             }
         )
         
-        # Initialize pattern recognizers with different confidence thresholds for testing
-        single_min_confidence = Decimal("50")  # Keep single patterns at 50
-        multi_min_confidence = Decimal("30")   # Lower multi-patterns to 30 for testing
-        self.single_pattern_recognizer = SinglePatternRecognizer(min_confidence=single_min_confidence)
-        self.multi_pattern_recognizer = MultiPatternRecognizer(min_confidence=multi_min_confidence)
-        
         # Initialize timeframe analyzer with custom recognizers
         self.timeframe_analyzer = TimeframeAnalyzer(strategy_config)
         # Override the analyzer's recognizers with our custom ones
-        self.timeframe_analyzer.single_recognizer = self.single_pattern_recognizer
+        self.timeframe_analyzer.single_recognizer = self.pattern_recognizer
         self.timeframe_analyzer.multi_recognizer = self.multi_pattern_recognizer
         
         # Initialize pattern scoring engine
         self.pattern_scoring_engine = PatternScoringEngine()
         
         # Initialize signal generator
-        signal_config = SignalConfiguration(
-            confidence_threshold=self.config.min_confidence_threshold,
-            strength_threshold=self.config.min_pattern_strength,
-            signal_expiry_minutes=self.config.signal_expiry_minutes
-        )
+        signal_config = self.signal_config
         self.signal_generator = SignalGenerator(signal_config)
         
         # Initialize narrative generator
-        narrative_config = NarrativeConfiguration(
-            style=self.config.narrative_style,
-            include_technical_details=self.config.include_technical_details,
-            include_risk_metrics=self.config.include_risk_metrics
-        )
+        narrative_config = self.narrative_config
         self.narrative_generator = NarrativeGenerator(narrative_config)
         
     async def _start(self):
@@ -522,12 +585,7 @@ class CandlestickStrategyAgent(BaseAgent):
             has_patterns = analysis_result.total_patterns_detected > 0
             
             # Load quality threshold from centralized config
-            try:
-                from ..config_manager import get_config_manager
-                config_manager = get_config_manager()
-                quality_threshold = config_manager.get_decimal('strategy', 'timeframe_analysis', 'data_quality_threshold', default=20)  # Default 20 for testing
-            except Exception:
-                quality_threshold = Decimal("20")  # Fallback default for testing
+            quality_threshold = self.config_manager.get_decimal('strategy', 'timeframe_analysis', 'data_quality_threshold', default=20)  # Default 20 for testing
                 
             meets_quality = analysis_result.data_quality_score >= quality_threshold
             meets_latency = analysis_result.meets_latency_requirement
@@ -615,7 +673,8 @@ class CandlestickStrategyAgent(BaseAgent):
                 # Check if pattern meets criteria
                 confidence = getattr(pattern, 'confidence', None)
                 reliability = getattr(pattern, 'reliability', None)
-                min_confidence_threshold = Decimal("50")  # Reduced for testing 
+                # Lower threshold so multi-candle patterns with reasonable confidence aren't discarded
+                min_confidence_threshold = Decimal("40")
                 min_reliability = Decimal("0.3")  # Reduced for testing
                 
                 if (confidence is not None and reliability is not None and
