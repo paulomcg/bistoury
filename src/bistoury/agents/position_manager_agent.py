@@ -377,6 +377,7 @@ class PositionManagerAgent(BaseAgent):
         # Performance tracking
         self.performance_analyzer = PerformanceAnalyzer(self.config.initial_balance)
         self.total_trades = 0
+        self.winning_trades = 0
         self.total_pnl = Decimal('0')
         self.messages_processed = 0  # Track processed messages
         
