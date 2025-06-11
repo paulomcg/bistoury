@@ -493,8 +493,18 @@ class PositionManagerAgent(BaseAgent):
                 return
             
             signal = message.payload
+            # Extract specific pattern information from signal metadata
             strategy_name = getattr(signal, 'strategy', 'Unknown')
-            self.logger.info(f"🎯 STRATEGY TRIGGERED: [{strategy_name}] → {signal.direction} {signal.symbol} (confidence: {signal.confidence:.2f})")
+            pattern_name = getattr(signal, 'metadata', {}).get('specific_pattern') or getattr(signal, 'metadata', {}).get('pattern_name', 'Unknown Pattern')
+            pattern_type = getattr(signal, 'metadata', {}).get('pattern_type', '')
+            
+            # Create detailed strategy identification
+            if pattern_name != 'Unknown Pattern':
+                strategy_detail = f"{strategy_name}: {pattern_name}"
+            else:
+                strategy_detail = strategy_name
+                
+            self.logger.info(f"🎯 STRATEGY TRIGGERED: [{strategy_detail}] → {signal.direction} {signal.symbol} (confidence: {signal.confidence:.2f})")
             
             if signal.confidence < 0.6:
                 return
@@ -583,8 +593,10 @@ class PositionManagerAgent(BaseAgent):
                 if (existing_position.side == PositionSide.LONG and order_side == OrderSide.BUY) or \
                    (existing_position.side == PositionSide.SHORT and order_side == OrderSide.SELL):
                     # Same direction - keep existing position, no need to trade
+                    pattern_name = getattr(signal, 'metadata', {}).get('specific_pattern') or getattr(signal, 'metadata', {}).get('pattern_name', 'Unknown Pattern')
                     strategy_name = getattr(signal, 'strategy', 'Unknown')
-                    self.logger.info(f"⏭️  SIGNAL IGNORED: [{strategy_name}] {signal.direction} {symbol} - already have {existing_position.side.value} position")
+                    strategy_detail = f"{strategy_name}: {pattern_name}" if pattern_name != 'Unknown Pattern' else strategy_name
+                    self.logger.info(f"⏭️  SIGNAL IGNORED: [{strategy_detail}] {signal.direction} {symbol} - already have {existing_position.side.value} position")
                     return
                 else:
                     # Opposite direction - close existing position (reversal)

@@ -143,50 +143,50 @@ def status(ctx: click.Context) -> None:
     "-m",
     type=click.Choice(["historical", "live"]),
     default="historical",
-    help="Paper trading mode"
+    help="Paper trading mode: 'historical' uses historical data replay, 'live' connects to real-time data"
 )
 @click.option(
     "--symbol",
     "-s",
     default="BTC",
-    help="Trading symbol"
+    help="Trading symbol to analyze (e.g., BTC, ETH). Determines which asset's price data to load"
 )
 @click.option(
     "--timeframe",
     "-t",
     type=click.Choice(['1m', '5m', '15m', '1h', '4h', '1d']),
     default="15m",
-    help="Timeframe for analysis"
+    help="Candlestick timeframe for technical analysis. Lower timeframes = more signals but more noise"
 )
 @click.option(
     "--duration",
     "-d",
     type=int,
     default=60,
-    help="Trading duration in seconds (default: use all available data)"
+    help="Session duration in seconds. Default (60s) = auto-calculate based on ALL available historical data. Higher values = longer sessions with fixed duration"
 )
 @click.option(
     "--balance",
     type=float,
     default=10000.0,
-    help="Initial balance in USD"
+    help="Starting portfolio balance in USD. This is your virtual money for paper trading (no real money involved)"
 )
 @click.option(
     "--speed",
     type=float,
     default=100.0,
-    help="Replay speed multiplier (historical mode only)"
+    help="Replay speed multiplier for historical mode. 1.0 = normal speed, 100.0 = 100x faster, 0.5 = half speed. Higher = faster completion"
 )
 @click.option(
     "--min-confidence",
     type=float,
     default=0.5,
-    help="Minimum signal confidence"
+    help="Minimum signal confidence threshold (0.0-1.0). Only signals above this confidence level will trigger trades. Higher = fewer but higher-quality signals"
 )
 @click.option(
     "--live",
     is_flag=True,
-    help="Show live dashboard with real-time statistics and reduced logging"
+    help="Enable live dashboard mode with real-time P&L updates and reduced logging output for cleaner display"
 )
 @click.pass_context
 def paper_trade(ctx: click.Context, mode: str, symbol: str, timeframe: str, 

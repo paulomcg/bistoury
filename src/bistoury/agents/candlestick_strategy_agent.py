@@ -566,7 +566,8 @@ class CandlestickStrategyAgent(BaseAgent):
             # Create signal ID
             signal_id = f"candlestick_{symbol}_{pattern.pattern_type.value}_{int(datetime.now(timezone.utc).timestamp())}"
             
-            # Create TradingSignal
+            # Create TradingSignal with detailed pattern information
+            pattern_name = pattern.pattern_type.value.replace('_', ' ').title()
             signal = TradingSignal(
                 signal_id=signal_id,
                 symbol=symbol,
@@ -578,8 +579,14 @@ class CandlestickStrategyAgent(BaseAgent):
                 timeframe=pattern.timeframe,
                 timestamp=datetime.now(timezone.utc),
                 source="candlestick_strategy",
-                reason=f"{pattern.pattern_type.value} pattern detected with {pattern.confidence}% confidence"
+                reason=f"{pattern_name} pattern detected with {pattern.confidence}% confidence"
             )
+            
+            # Add detailed pattern metadata for precise strategy identification
+            signal.add_metadata("pattern_type", pattern.pattern_type.value)
+            signal.add_metadata("pattern_name", pattern_name)
+            signal.add_metadata("strategy", f"candlestick_strategy")
+            signal.add_metadata("specific_pattern", pattern_name)  # Human-readable pattern name
             
             self.logger.info(f"✅ Signal created successfully: {signal.signal_id}")
             return signal
@@ -595,7 +602,20 @@ class CandlestickStrategyAgent(BaseAgent):
             # Generate narrative for the signal
             narrative = await self._generate_signal_narrative(signal)
             
-            # Create signal payload for message bus
+            # Create signal payload for message bus - include all signal metadata
+            payload_metadata = {
+                "signal_id": signal.signal_id,
+                "price": float(signal.price),
+                "stop_loss": float(signal.stop_loss) if signal.stop_loss else None,
+                "take_profit": float(signal.target_price) if signal.target_price else None,
+                "expiry_time": signal.expiry.isoformat() if signal.expiry else None,
+                "narrative": narrative
+            }
+            
+            # Merge in the signal's metadata (includes pattern information)
+            if hasattr(signal, 'metadata') and signal.metadata:
+                payload_metadata.update(signal.metadata)
+            
             signal_payload = TradingSignalPayload(
                 symbol=signal.symbol,
                 signal_type=signal.signal_type.value,
@@ -605,14 +625,7 @@ class CandlestickStrategyAgent(BaseAgent):
                 timeframe=signal.timeframe.value,
                 strategy="candlestick_strategy",
                 reasoning=signal.reason,
-                metadata={
-                    "signal_id": signal.signal_id,
-                    "price": float(signal.price),
-                    "stop_loss": float(signal.stop_loss) if signal.stop_loss else None,
-                    "take_profit": float(signal.target_price) if signal.target_price else None,
-                    "expiry_time": signal.expiry.isoformat() if signal.expiry else None,
-                    "narrative": narrative
-                },
+                metadata=payload_metadata,
                 timestamp=signal.timestamp
             )
             
