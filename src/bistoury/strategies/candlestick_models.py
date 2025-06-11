@@ -401,7 +401,7 @@ class StrategyConfiguration(BaseModel):
     Configuration for candlestick strategy parameters.
     
     Defines all configurable parameters for pattern recognition,
-    analysis, and signal generation.
+    analysis, and signal generation. Loads from centralized config files.
     """
     
     # Timeframes to analyze
@@ -478,6 +478,52 @@ class StrategyConfiguration(BaseModel):
         default=False,
         description="Enable complex chart pattern detection"
     )
+    
+    @classmethod
+    def from_config_manager(cls) -> 'StrategyConfiguration':
+        """Create configuration from centralized config manager."""
+        try:
+            from ..config_manager import get_config_manager
+            config_manager = get_config_manager()
+            
+            # Timeframe mapping
+            timeframe_map = {
+                "1m": Timeframe.ONE_MINUTE,
+                "5m": Timeframe.FIVE_MINUTES, 
+                "15m": Timeframe.FIFTEEN_MINUTES,
+                "1h": Timeframe.ONE_HOUR,
+                "4h": Timeframe.FOUR_HOURS,
+                "1d": Timeframe.ONE_DAY
+            }
+            
+            # Load timeframe settings
+            primary_tf_str = config_manager.get('strategy', 'timeframe_analysis', 'primary_timeframe', default='5m')
+            primary_timeframe = timeframe_map.get(primary_tf_str, Timeframe.FIVE_MINUTES)
+            
+            default_tf_list = config_manager.get_list('strategy', 'timeframe_analysis', 'default_timeframes', default=['1m', '5m', '15m'])
+            timeframes = [timeframe_map.get(tf, Timeframe.FIVE_MINUTES) for tf in default_tf_list]
+            
+            # Load other configurations
+            return cls(
+                timeframes=timeframes,
+                primary_timeframe=primary_timeframe,
+                min_pattern_confidence=config_manager.get_decimal('strategy', 'pattern_detection', 'min_pattern_confidence', default=60),
+                min_confluence_score=config_manager.get_decimal('strategy', 'pattern_detection', 'min_confluence_score', default=50),
+                min_quality_score=config_manager.get_decimal('strategy', 'pattern_detection', 'min_quality_score', default=70),
+                volume_lookback_periods=config_manager.get_int('strategy', 'volume_analysis', 'volume_lookback_periods', default=20),
+                min_volume_ratio=config_manager.get_decimal('strategy', 'volume_analysis', 'min_volume_ratio', default=1.2),
+                default_stop_loss_pct=config_manager.get_decimal('strategy', 'risk_management', 'default_stop_loss_pct', default=2.0),
+                default_take_profit_pct=config_manager.get_decimal('strategy', 'risk_management', 'default_take_profit_pct', default=4.0),
+                min_risk_reward_ratio=config_manager.get_decimal('strategy', 'risk_management', 'min_risk_reward_ratio', default=1.5),
+                enable_single_patterns=config_manager.get_bool('strategy', 'pattern_detection', 'enable_single_patterns', default=True),
+                enable_multi_patterns=config_manager.get_bool('strategy', 'pattern_detection', 'enable_multi_patterns', default=True),
+                enable_complex_patterns=config_manager.get_bool('strategy', 'pattern_detection', 'enable_complex_patterns', default=False)
+            )
+        except Exception as e:
+            # Fallback to defaults if config loading fails
+            import logging
+            logging.warning(f"Failed to load strategy config from centralized manager: {e}")
+            return cls()
     
     model_config = ConfigDict(
         validate_assignment=True,

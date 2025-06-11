@@ -22,6 +22,15 @@ from abc import ABC, abstractmethod
 from ...models.market_data import CandlestickData, Timeframe
 from ...models.signals import CandlestickPattern, PatternType, SignalDirection
 from ..candlestick_models import VolumeProfile
+from .pattern_config import get_pattern_config
+from .config_manager import initialize_pattern_config
+
+# Initialize pattern configuration on module import
+try:
+    initialize_pattern_config()
+except Exception as e:
+    print(f"Warning: Could not initialize pattern configuration: {e}")
+    print("Using default hardcoded values")
 
 class MultiPatternDetector(ABC):
     """
@@ -173,17 +182,18 @@ class EngulfingDetector(MultiPatternDetector):
         
         engulfing_ratio = second_body_size / first_body_size
         
-        # Require meaningful engulfing (at least 1.5x larger)
-        min_engulfing_ratio = Decimal('1.5')
-        if engulfing_ratio < min_engulfing_ratio:
+        config = get_pattern_config().engulfing
+        
+        # Require meaningful engulfing
+        if engulfing_ratio < config.min_engulfing_ratio:
             return None
         
         # Calculate confidence based on engulfing strength
-        ratio_score = min(Decimal('50'), (engulfing_ratio - min_engulfing_ratio) * Decimal('25'))
-        volume_score = Decimal('20') if (volume_profile and volume_profile.volume_confirmation) else Decimal('10')
+        ratio_score = min(config.max_ratio_score, (engulfing_ratio - config.min_engulfing_ratio) * config.ratio_score_multiplier)
+        volume_score = config.volume_confirmed_score if (volume_profile and volume_profile.volume_confirmation) else config.volume_unconfirmed_score
         pattern_strength = self._calculate_pattern_strength(candles)
         
-        confidence = Decimal('30') + ratio_score + volume_score + (pattern_strength * Decimal('0.4'))
+        confidence = config.base_confidence + ratio_score + volume_score + (pattern_strength * config.pattern_strength_weight)
         confidence = min(Decimal('100'), confidence)
         
         if confidence < self.min_confidence:
@@ -193,16 +203,16 @@ class EngulfingDetector(MultiPatternDetector):
         is_bullish_engulfing = second_candle.is_bullish
         
         if is_bullish_engulfing:
-            bullish_prob = Decimal('0.75')
-            bearish_prob = Decimal('0.25')
+            bullish_prob = config.bullish_bullish_prob
+            bearish_prob = config.bullish_bearish_prob
             engulfing_type = "bullish"
         else:
-            bullish_prob = Decimal('0.25')
-            bearish_prob = Decimal('0.75')
+            bullish_prob = config.bearish_bullish_prob
+            bearish_prob = config.bearish_bearish_prob
             engulfing_type = "bearish"
         
         # Reliability increases with stronger engulfing
-        reliability = Decimal('0.7') + min(Decimal('0.2'), (engulfing_ratio - Decimal('1')) * Decimal('0.1'))
+        reliability = config.base_reliability + min(config.max_reliability_bonus, (engulfing_ratio - Decimal('1')) * config.reliability_multiplier)
         
         metadata = {
             "engulfing_type": engulfing_type,
@@ -260,10 +270,11 @@ class HaramiDetector(MultiPatternDetector):
         first_body_size = first_body_top - first_body_bottom
         second_body_size = second_body_top - second_body_bottom
         
-        # Require substantial first candle body (at least 1% of price - more realistic)
-        min_first_body_ratio = Decimal('0.01')
+        config = get_pattern_config().harami
+        
+        # Require substantial first candle body
         first_body_ratio = first_body_size / first_candle.close
-        if first_body_ratio < min_first_body_ratio:
+        if first_body_ratio < config.min_first_body_ratio:
             return None
         
         # Check if second candle is contained within first candle's body
@@ -280,16 +291,15 @@ class HaramiDetector(MultiPatternDetector):
         containment_ratio = second_body_size / first_body_size
         
         # Require meaningful containment (second candle should be much smaller)
-        max_containment_ratio = Decimal('0.6')
-        if containment_ratio > max_containment_ratio:
+        if containment_ratio > config.max_containment_ratio:
             return None
         
         # Calculate confidence based on containment quality
-        containment_score = (max_containment_ratio - containment_ratio) / max_containment_ratio * Decimal('40')
-        first_body_score = min(Decimal('30'), first_body_ratio * Decimal('1000'))
-        volume_score = Decimal('15') if (volume_profile and volume_profile.volume_confirmation) else Decimal('5')
+        containment_score = min(config.max_containment_score, (config.max_containment_ratio - containment_ratio) / config.max_containment_ratio * config.containment_score_multiplier)
+        first_body_score = min(config.max_body_score, first_body_ratio * config.body_score_multiplier)
+        volume_score = config.volume_confirmed_score if (volume_profile and volume_profile.volume_confirmation) else config.volume_unconfirmed_score
         
-        confidence = Decimal('25') + containment_score + first_body_score + volume_score
+        confidence = config.base_confidence + containment_score + first_body_score + volume_score
         confidence = min(Decimal('100'), confidence)
         
         if confidence < self.min_confidence:
@@ -299,18 +309,17 @@ class HaramiDetector(MultiPatternDetector):
         # Bias toward reversal of the first candle's direction
         if first_candle.is_bullish:
             # After bullish candle, expect bearish reversal
-            bullish_prob = Decimal('0.35')
-            bearish_prob = Decimal('0.65')
+            bullish_prob = config.bearish_bullish_prob
+            bearish_prob = config.bearish_bearish_prob
             harami_type = "bearish"
         else:
             # After bearish candle, expect bullish reversal  
-            bullish_prob = Decimal('0.65')
-            bearish_prob = Decimal('0.35')
+            bullish_prob = config.bullish_bullish_prob
+            bearish_prob = config.bullish_bearish_prob
             harami_type = "bullish"
         
         # Reliability moderate due to indecision nature
-        reliability = Decimal('0.6') + (confidence - Decimal('60')) / Decimal('200')
-        reliability = min(Decimal('0.8'), max(Decimal('0.5'), reliability))
+        reliability = config.base_reliability + min(config.max_reliability_bonus, (confidence - Decimal('60')) / Decimal('200'))
         
         metadata = {
             "harami_type": harami_type,
@@ -368,10 +377,11 @@ class PiercingLineDetector(MultiPatternDetector):
         first_body_size = first_body_top - first_body_bottom
         first_body_midpoint = (first_body_top + first_body_bottom) / Decimal('2')
         
-        # Require substantial first candle body (reduced for more realistic detection)
-        min_body_ratio = Decimal('0.008')  # 0.8% of price
+        config = get_pattern_config().piercing_line
+        
+        # Require substantial first candle body
         first_body_ratio = first_body_size / first_candle.close
-        if first_body_ratio < min_body_ratio:
+        if first_body_ratio < config.min_body_ratio:
             return None
         
         # Check gap down opening
@@ -381,35 +391,34 @@ class PiercingLineDetector(MultiPatternDetector):
         
         # Check piercing (close above midpoint)
         piercing = second_candle.close > first_body_midpoint
-        if not piercing:
-            return None
-        
-        # Calculate piercing strength
+        # Additional check for minimum pierce ratio
         pierce_distance = second_candle.close - first_body_midpoint
         pierce_ratio = pierce_distance / first_body_size
+        if not piercing or pierce_ratio < config.min_pierce_ratio:
+            return None
         
         # Calculate gap size
         gap_size = first_candle.low - second_candle.open
         gap_ratio = gap_size / first_candle.close
         
         # Calculate confidence
-        pierce_score = min(Decimal('40'), pierce_ratio * Decimal('100'))
-        gap_score = min(Decimal('25'), gap_ratio * Decimal('500'))
-        body_score = min(Decimal('25'), first_body_ratio * Decimal('1000'))
-        volume_score = Decimal('20') if (volume_profile and volume_profile.volume_confirmation) else Decimal('5')
+        pierce_score = min(config.max_pierce_score, pierce_ratio * config.pierce_score_multiplier)
+        gap_score = min(config.max_gap_score, gap_ratio * config.gap_score_multiplier)
+        body_score = min(config.max_body_score, first_body_ratio * config.body_score_multiplier)
+        volume_score = config.volume_confirmed_score if (volume_profile and volume_profile.volume_confirmation) else config.volume_unconfirmed_score
         
-        confidence = Decimal('10') + pierce_score + gap_score + body_score + volume_score
+        confidence = config.base_confidence + pierce_score + gap_score + body_score + volume_score
         confidence = min(Decimal('100'), confidence)
         
         if confidence < self.min_confidence:
             return None
         
         # Piercing Line is bullish reversal pattern
-        bullish_prob = Decimal('0.75')
-        bearish_prob = Decimal('0.25')
+        bullish_prob = config.bullish_prob
+        bearish_prob = config.bearish_prob
         
         # Reliability based on how deep the piercing goes
-        reliability = Decimal('0.65') + min(Decimal('0.25'), pierce_ratio)
+        reliability = config.base_reliability + min(config.max_reliability_bonus, pierce_ratio)
         
         metadata = {
             "gap_size": float(gap_size),
@@ -468,10 +477,11 @@ class DarkCloudCoverDetector(MultiPatternDetector):
         first_body_size = first_body_top - first_body_bottom
         first_body_midpoint = (first_body_top + first_body_bottom) / Decimal('2')
         
-        # Require substantial first candle body (reduced for more realistic detection)
-        min_body_ratio = Decimal('0.008')  # 0.8% of price
+        config = get_pattern_config().dark_cloud_cover
+        
+        # Require substantial first candle body
         first_body_ratio = first_body_size / first_candle.close
-        if first_body_ratio < min_body_ratio:
+        if first_body_ratio < config.min_body_ratio:
             return None
         
         # Check gap up opening
@@ -481,35 +491,34 @@ class DarkCloudCoverDetector(MultiPatternDetector):
         
         # Check cloud cover (close below midpoint)
         cloud_cover = second_candle.close < first_body_midpoint
-        if not cloud_cover:
-            return None
-        
-        # Calculate cloud cover strength
+        # Additional check for minimum cover ratio
         cover_distance = first_body_midpoint - second_candle.close
         cover_ratio = cover_distance / first_body_size
+        if not cloud_cover or cover_ratio < config.min_cover_ratio:
+            return None
         
         # Calculate gap size
         gap_size = second_candle.open - first_candle.high
         gap_ratio = gap_size / first_candle.close
         
         # Calculate confidence
-        cover_score = min(Decimal('40'), cover_ratio * Decimal('100'))
-        gap_score = min(Decimal('25'), gap_ratio * Decimal('500'))
-        body_score = min(Decimal('25'), first_body_ratio * Decimal('1000'))
-        volume_score = Decimal('20') if (volume_profile and volume_profile.volume_confirmation) else Decimal('5')
+        cover_score = min(config.max_cover_score, cover_ratio * config.cover_score_multiplier)
+        gap_score = min(config.max_gap_score, gap_ratio * config.gap_score_multiplier)
+        body_score = min(config.max_body_score, first_body_ratio * config.body_score_multiplier)
+        volume_score = config.volume_confirmed_score if (volume_profile and volume_profile.volume_confirmation) else config.volume_unconfirmed_score
         
-        confidence = Decimal('10') + cover_score + gap_score + body_score + volume_score
+        confidence = config.base_confidence + cover_score + gap_score + body_score + volume_score
         confidence = min(Decimal('100'), confidence)
         
         if confidence < self.min_confidence:
             return None
         
         # Dark Cloud Cover is bearish reversal pattern
-        bullish_prob = Decimal('0.25')
-        bearish_prob = Decimal('0.75')
+        bullish_prob = config.bullish_prob
+        bearish_prob = config.bearish_prob
         
         # Reliability based on how deep the cloud cover goes
-        reliability = Decimal('0.65') + min(Decimal('0.25'), cover_ratio)
+        reliability = config.base_reliability + min(config.max_reliability_bonus, cover_ratio)
         
         metadata = {
             "gap_size": float(gap_size),
@@ -567,16 +576,16 @@ class MorningStarDetector(MultiPatternDetector):
         star_body_size = abs(star_candle.close - star_candle.open)
         third_body_size = third_candle.close - third_candle.open  # Bullish
         
+        config = get_pattern_config().morning_star
+        
         # Require substantial first candle body
-        min_first_body_ratio = Decimal('0.015')
         first_body_ratio = first_body_size / first_candle.close
-        if first_body_ratio < min_first_body_ratio:
+        if first_body_ratio < config.min_first_body_ratio:
             return None
         
         # Require small star body relative to first candle
-        max_star_ratio = Decimal('0.3')
         star_ratio = star_body_size / first_body_size if first_body_size > 0 else Decimal('1')
-        if star_ratio > max_star_ratio:
+        if star_ratio > config.max_star_ratio:
             return None
         
         # Check gaps
@@ -601,10 +610,10 @@ class MorningStarDetector(MultiPatternDetector):
         recovery_ratio = recovery_distance / first_body_size
         
         # Calculate confidence
-        gap_score = min(Decimal('25'), gap_ratio * Decimal('1000'))
-        star_score = (max_star_ratio - star_ratio) / max_star_ratio * Decimal('25')
-        recovery_score = min(Decimal('30'), recovery_ratio * Decimal('100'))
-        volume_score = Decimal('20') if (volume_profile and volume_profile.volume_confirmation) else Decimal('10')
+        gap_score = min(config.max_gap_score, gap_ratio * config.gap_score_multiplier)
+        star_score = (config.max_star_ratio - star_ratio) / config.max_star_ratio * config.star_score_weight
+        recovery_score = min(config.max_recovery_score, recovery_ratio * config.recovery_score_multiplier)
+        volume_score = config.volume_confirmed_score if (volume_profile and volume_profile.volume_confirmation) else config.volume_unconfirmed_score
         
         confidence = gap_score + star_score + recovery_score + volume_score
         confidence = min(Decimal('100'), confidence)
@@ -613,11 +622,11 @@ class MorningStarDetector(MultiPatternDetector):
             return None
         
         # Morning Star is bullish reversal pattern
-        bullish_prob = Decimal('0.8')
-        bearish_prob = Decimal('0.2')
+        bullish_prob = config.bullish_prob
+        bearish_prob = config.bearish_prob
         
         # High reliability for three-candle reversal patterns
-        reliability = Decimal('0.75') + min(Decimal('0.2'), recovery_ratio)
+        reliability = config.base_reliability + min(config.max_reliability_bonus, recovery_ratio)
         
         metadata = {
             "gap_size": float(gap_size),
@@ -676,16 +685,16 @@ class EveningStarDetector(MultiPatternDetector):
         star_body_size = abs(star_candle.close - star_candle.open)
         third_body_size = third_candle.open - third_candle.close  # Bearish
         
-        # Require substantial first candle body (reduced for more realistic detection)
-        min_first_body_ratio = Decimal('0.008')  # 0.8% of price
+        config = get_pattern_config().evening_star
+        
+        # Require substantial first candle body
         first_body_ratio = first_body_size / first_candle.close
-        if first_body_ratio < min_first_body_ratio:
+        if first_body_ratio < config.min_first_body_ratio:
             return None
         
         # Require small star body relative to first candle
-        max_star_ratio = Decimal('0.3')
         star_ratio = star_body_size / first_body_size if first_body_size > 0 else Decimal('1')
-        if star_ratio > max_star_ratio:
+        if star_ratio > config.max_star_ratio:
             return None
         
         # Check gaps
@@ -710,10 +719,10 @@ class EveningStarDetector(MultiPatternDetector):
         decline_ratio = decline_distance / first_body_size
         
         # Calculate confidence
-        gap_score = min(Decimal('25'), gap_ratio * Decimal('1000'))
-        star_score = (max_star_ratio - star_ratio) / max_star_ratio * Decimal('25')
-        decline_score = min(Decimal('30'), decline_ratio * Decimal('100'))
-        volume_score = Decimal('20') if (volume_profile and volume_profile.volume_confirmation) else Decimal('10')
+        gap_score = min(config.max_gap_score, gap_ratio * config.gap_score_multiplier)
+        star_score = (config.max_star_ratio - star_ratio) / config.max_star_ratio * config.star_score_weight
+        decline_score = min(config.max_decline_score, decline_ratio * config.decline_score_multiplier)
+        volume_score = config.volume_confirmed_score if (volume_profile and volume_profile.volume_confirmation) else config.volume_unconfirmed_score
         
         confidence = gap_score + star_score + decline_score + volume_score
         confidence = min(Decimal('100'), confidence)
@@ -722,11 +731,11 @@ class EveningStarDetector(MultiPatternDetector):
             return None
         
         # Evening Star is bearish reversal pattern
-        bullish_prob = Decimal('0.2')
-        bearish_prob = Decimal('0.8')
+        bullish_prob = config.bullish_prob
+        bearish_prob = config.bearish_prob
         
         # High reliability for three-candle reversal patterns
-        reliability = Decimal('0.75') + min(Decimal('0.2'), decline_ratio)
+        reliability = config.base_reliability + min(config.max_reliability_bonus, decline_ratio)
         
         metadata = {
             "gap_size": float(gap_size),

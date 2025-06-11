@@ -1,0 +1,52 @@
+{
+  "timeframe_analysis": {
+    "primary_timeframe": "5m",
+    "supported_timeframes": ["1m", "5m", "15m", "1h", "4h", "1d"],
+    "default_timeframes": ["1m", "5m", "15m"],
+    "sync_window_minutes": 60,
+    "min_candles_required": 3,
+    "data_quality_threshold": 60.0
+  },
+  "pattern_detection": {
+    "min_pattern_confidence": 60.0,
+    "min_confluence_score": 50.0,
+    "min_quality_score": 70.0,
+    "enable_single_patterns": true,
+    "enable_multi_patterns": true,
+    "enable_complex_patterns": false,
+    "single_pattern_confidence_threshold": 50.0,
+    "multi_pattern_confidence_threshold": 30.0
+  },
+  "volume_analysis": {
+    "volume_lookback_periods": 20,
+    "min_volume_ratio": 1.2,
+    "volume_confirmation_threshold": 1.5,
+    "enable_volume_confirmation": true
+  },
+  "risk_management": {
+    "default_stop_loss_pct": 2.0,
+    "default_take_profit_pct": 4.0,
+    "min_risk_reward_ratio": 1.5,
+    "max_position_size_pct": 10.0,
+    "emergency_stop_loss_pct": 5.0
+  },
+  "signal_generation": {
+    "signal_expiry_minutes": 15,
+    "max_signals_per_symbol": 3,
+    "min_signal_strength": 0.6,
+    "require_confluence": true,
+    "require_volume_confirmation": false
+  },
+  "performance": {
+    "max_analysis_time_ms": 2000,
+    "analysis_throttle_seconds": 10,
+    "max_data_buffer_size": 1000,
+    "data_cleanup_interval_seconds": 300
+  },
+  "narrative": {
+    "style": "technical",
+    "include_technical_details": true,
+    "include_risk_metrics": true,
+    "include_confluence_details": true
+  }
+} 

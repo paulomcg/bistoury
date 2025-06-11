@@ -21,6 +21,15 @@ from abc import ABC, abstractmethod
 from ...models.market_data import CandlestickData, Timeframe
 from ...models.signals import CandlestickPattern, PatternType, SignalDirection
 from ..candlestick_models import PatternStrength, VolumeProfile
+from .pattern_config import get_pattern_config
+from .config_manager import initialize_pattern_config
+
+# Initialize pattern configuration on module import
+try:
+    initialize_pattern_config()
+except Exception as e:
+    print(f"Warning: Could not initialize pattern configuration: {e}")
+    print("Using default hardcoded values")
 
 
 class SinglePatternDetector(ABC):
@@ -121,32 +130,31 @@ class DojiDetector(SinglePatternDetector):
     
     def detect(self, candle: CandlestickData, volume_profile: Optional[VolumeProfile] = None) -> Optional[CandlestickPattern]:
         """Detect Doji pattern."""
+        config = get_pattern_config().doji
+        
         body_ratio = self._calculate_body_to_range_ratio(candle)
         upper_shadow_ratio = self._calculate_upper_shadow_ratio(candle)
         lower_shadow_ratio = self._calculate_lower_shadow_ratio(candle)
         
-        # Doji requires very small body relative to range (made more restrictive)
-        max_body_ratio = Decimal('0.02')  # 2% of range (reduced from 5%)
-        
-        if body_ratio > max_body_ratio:
+        # Doji requires very small body relative to range
+        if body_ratio > config.max_body_ratio:
             return None
         
         # Also require meaningful range (avoid noise on flat markets)
         total_range = candle.high - candle.low
-        min_range_ratio = Decimal('0.005')  # 0.5% of price
         range_ratio = total_range / candle.close
-        if range_ratio < min_range_ratio:
+        if range_ratio < config.min_range_ratio:
             return None
         
         # Calculate confidence based on how small the body is
-        body_score = (max_body_ratio - body_ratio) / max_body_ratio * Decimal('60')
+        body_score = (config.max_body_ratio - body_ratio) / config.max_body_ratio * config.body_score_weight
         
         # Bonus for symmetric shadows (more indecision)
         shadow_symmetry = Decimal('1') - abs(upper_shadow_ratio - lower_shadow_ratio)
-        symmetry_bonus = shadow_symmetry * Decimal('20')
+        symmetry_bonus = shadow_symmetry * config.symmetry_bonus_weight
         
         # Bonus for good range (meaningful price movement)
-        range_bonus = min(Decimal('20'), range_ratio * Decimal('2000'))
+        range_bonus = min(config.range_bonus_weight, range_ratio * config.range_bonus_multiplier)
         
         confidence = min(Decimal('100'), body_score + symmetry_bonus + range_bonus)
         
@@ -154,23 +162,21 @@ class DojiDetector(SinglePatternDetector):
             return None
         
         # Determine Doji subtype
-        doji_subtype = self._classify_doji_subtype(upper_shadow_ratio, lower_shadow_ratio)
+        doji_subtype = self._classify_doji_subtype(upper_shadow_ratio, lower_shadow_ratio, config)
         
         # Doji is neutral but can be bullish/bearish based on context
-        # Standard weighting: slightly more neutral
-        bullish_prob = Decimal('0.45')
-        bearish_prob = Decimal('0.45')
-        
-        # Adjust probabilities based on subtype
         if doji_subtype == "dragonfly":
-            bullish_prob = Decimal('0.65')
-            bearish_prob = Decimal('0.35')
+            bullish_prob = config.dragonfly_bullish_prob
+            bearish_prob = config.dragonfly_bearish_prob
         elif doji_subtype == "gravestone":
-            bullish_prob = Decimal('0.35')
-            bearish_prob = Decimal('0.65')
+            bullish_prob = config.gravestone_bullish_prob
+            bearish_prob = config.gravestone_bearish_prob
+        else:
+            bullish_prob = config.standard_bullish_prob
+            bearish_prob = config.standard_bearish_prob
         
         # Higher reliability for more perfect Doji
-        reliability = Decimal('0.7') + (symmetry_bonus / Decimal('100'))
+        reliability = config.base_reliability + (symmetry_bonus / Decimal('100'))
         
         metadata = {
             "doji_subtype": doji_subtype,
@@ -190,16 +196,13 @@ class DojiDetector(SinglePatternDetector):
             metadata=metadata
         )
     
-    def _classify_doji_subtype(self, upper_ratio: Decimal, lower_ratio: Decimal) -> str:
+    def _classify_doji_subtype(self, upper_ratio: Decimal, lower_ratio: Decimal, config) -> str:
         """Classify the type of Doji based on shadow ratios."""
-        min_long_shadow = Decimal('0.4')  # 40% of range
-        max_short_shadow = Decimal('0.1')  # 10% of range
-        
-        if lower_ratio >= min_long_shadow and upper_ratio <= max_short_shadow:
+        if lower_ratio >= config.min_long_shadow and upper_ratio <= config.max_short_shadow:
             return "dragonfly"
-        elif upper_ratio >= min_long_shadow and lower_ratio <= max_short_shadow:
+        elif upper_ratio >= config.min_long_shadow and lower_ratio <= config.max_short_shadow:
             return "gravestone"
-        elif upper_ratio >= min_long_shadow and lower_ratio >= min_long_shadow:
+        elif upper_ratio >= config.min_long_shadow and lower_ratio >= config.min_long_shadow:
             return "long_legged"
         else:
             return "standard"
@@ -221,26 +224,24 @@ class HammerDetector(SinglePatternDetector):
     
     def detect(self, candle: CandlestickData, volume_profile: Optional[VolumeProfile] = None) -> Optional[CandlestickPattern]:
         """Detect Hammer pattern."""
+        config = get_pattern_config().hammer
+        
         body_ratio = self._calculate_body_to_range_ratio(candle)
         upper_shadow_ratio = self._calculate_upper_shadow_ratio(candle)
         lower_shadow_ratio = self._calculate_lower_shadow_ratio(candle)
         
         # Hammer requirements
-        min_lower_shadow = Decimal('0.6')   # Lower shadow >= 60% of range
-        max_upper_shadow = Decimal('0.15')  # Upper shadow <= 15% of range
-        max_body_ratio = Decimal('0.3')     # Body <= 30% of range
-        
-        if (lower_shadow_ratio < min_lower_shadow or 
-            upper_shadow_ratio > max_upper_shadow or 
-            body_ratio > max_body_ratio):
+        if (lower_shadow_ratio < config.min_lower_shadow or 
+            upper_shadow_ratio > config.max_upper_shadow or 
+            body_ratio > config.max_body_ratio):
             return None
         
         # Calculate confidence based on how well it fits criteria
-        lower_shadow_score = min(Decimal('40'), (lower_shadow_ratio - min_lower_shadow) * Decimal('100'))
-        upper_shadow_score = max(Decimal('0'), (max_upper_shadow - upper_shadow_ratio) * Decimal('200'))
-        body_score = (max_body_ratio - body_ratio) / max_body_ratio * Decimal('30')
+        lower_shadow_score = min(config.max_lower_shadow_score, (lower_shadow_ratio - config.min_lower_shadow) * config.lower_shadow_score_multiplier)
+        upper_shadow_score = max(Decimal('0'), (config.max_upper_shadow - upper_shadow_ratio) * config.upper_shadow_score_multiplier)
+        body_score = (config.max_body_ratio - body_ratio) / config.max_body_ratio * config.body_score_weight
         
-        confidence = Decimal('30') + lower_shadow_score + upper_shadow_score + body_score
+        confidence = config.base_confidence + lower_shadow_score + upper_shadow_score + body_score
         confidence = min(Decimal('100'), confidence)
         
         if confidence < self.min_confidence:
@@ -249,15 +250,15 @@ class HammerDetector(SinglePatternDetector):
         # Hammer is typically bullish reversal
         # Bullish body (close > open) gives slight edge
         if candle.is_bullish:
-            bullish_prob = Decimal('0.75')
-            bearish_prob = Decimal('0.25')
+            bullish_prob = config.bullish_body_bullish_prob
+            bearish_prob = config.bullish_body_bearish_prob
         else:
-            bullish_prob = Decimal('0.70')
-            bearish_prob = Decimal('0.30')
+            bullish_prob = config.bearish_body_bullish_prob
+            bearish_prob = config.bearish_body_bearish_prob
         
         # Reliability based on how textbook the pattern is
-        reliability = Decimal('0.75') + (confidence - Decimal('60')) / Decimal('200')
-        reliability = min(Decimal('0.95'), max(Decimal('0.6'), reliability))
+        reliability = config.base_reliability + (confidence - Decimal('60')) / config.reliability_divisor
+        reliability = min(config.max_reliability, max(config.min_reliability, reliability))
         
         metadata = {
             "body_ratio": float(body_ratio),
@@ -298,22 +299,20 @@ class ShootingStarDetector(SinglePatternDetector):
         upper_shadow_ratio = self._calculate_upper_shadow_ratio(candle)
         lower_shadow_ratio = self._calculate_lower_shadow_ratio(candle)
         
-        # Shooting Star requirements (inverse of Hammer)
-        min_upper_shadow = Decimal('0.6')   # Upper shadow >= 60% of range
-        max_lower_shadow = Decimal('0.15')  # Lower shadow <= 15% of range
-        max_body_ratio = Decimal('0.3')     # Body <= 30% of range
+        config = get_pattern_config().shooting_star
         
-        if (upper_shadow_ratio < min_upper_shadow or 
-            lower_shadow_ratio > max_lower_shadow or 
-            body_ratio > max_body_ratio):
+        # Shooting Star requirements (inverse of Hammer)
+        if (upper_shadow_ratio < config.min_upper_shadow or 
+            lower_shadow_ratio > config.max_lower_shadow or 
+            body_ratio > config.max_body_ratio):
             return None
         
         # Calculate confidence (similar to Hammer but for upper shadow)
-        upper_shadow_score = min(Decimal('40'), (upper_shadow_ratio - min_upper_shadow) * Decimal('100'))
-        lower_shadow_score = max(Decimal('0'), (max_lower_shadow - lower_shadow_ratio) * Decimal('200'))
-        body_score = (max_body_ratio - body_ratio) / max_body_ratio * Decimal('30')
+        upper_shadow_score = min(config.max_upper_shadow_score, (upper_shadow_ratio - config.min_upper_shadow) * config.upper_shadow_score_multiplier)
+        lower_shadow_score = max(Decimal('0'), (config.max_lower_shadow - lower_shadow_ratio) * config.lower_shadow_score_multiplier)
+        body_score = (config.max_body_ratio - body_ratio) / config.max_body_ratio * config.body_score_weight
         
-        confidence = Decimal('30') + upper_shadow_score + lower_shadow_score + body_score
+        confidence = config.base_confidence + upper_shadow_score + lower_shadow_score + body_score
         confidence = min(Decimal('100'), confidence)
         
         if confidence < self.min_confidence:
@@ -322,15 +321,15 @@ class ShootingStarDetector(SinglePatternDetector):
         # Shooting Star is typically bearish reversal
         # Bearish body (close < open) gives slight edge
         if candle.is_bearish:
-            bullish_prob = Decimal('0.25')
-            bearish_prob = Decimal('0.75')
+            bullish_prob = config.bearish_body_bullish_prob
+            bearish_prob = config.bearish_body_bearish_prob
         else:
-            bullish_prob = Decimal('0.30')
-            bearish_prob = Decimal('0.70')
+            bullish_prob = config.bullish_body_bullish_prob
+            bearish_prob = config.bullish_body_bearish_prob
         
         # Reliability based on pattern quality
-        reliability = Decimal('0.75') + (confidence - Decimal('60')) / Decimal('200')
-        reliability = min(Decimal('0.95'), max(Decimal('0.6'), reliability))
+        reliability = config.base_reliability + (confidence - Decimal('60')) / config.reliability_divisor
+        reliability = min(config.max_reliability, max(config.min_reliability, reliability))
         
         metadata = {
             "body_ratio": float(body_ratio),
@@ -367,27 +366,24 @@ class SpinningTopDetector(SinglePatternDetector):
     
     def detect(self, candle: CandlestickData, volume_profile: Optional[VolumeProfile] = None) -> Optional[CandlestickPattern]:
         """Detect Spinning Top pattern."""
+        config = get_pattern_config().spinning_top
+        
         body_ratio = self._calculate_body_to_range_ratio(candle)
         upper_shadow_ratio = self._calculate_upper_shadow_ratio(candle)
         lower_shadow_ratio = self._calculate_lower_shadow_ratio(candle)
         
-        # Spinning Top requirements
-        max_body_ratio = Decimal('0.3')     # Small body
-        min_shadow_ratio = Decimal('0.25')  # Decent shadows on both sides
-        max_shadow_diff = Decimal('0.3')    # Shadows relatively similar
-        
         shadow_difference = abs(upper_shadow_ratio - lower_shadow_ratio)
         
-        if (body_ratio > max_body_ratio or 
-            upper_shadow_ratio < min_shadow_ratio or 
-            lower_shadow_ratio < min_shadow_ratio or
-            shadow_difference > max_shadow_diff):
+        if (body_ratio > config.max_body_ratio or 
+            upper_shadow_ratio < config.min_shadow_ratio or 
+            lower_shadow_ratio < config.min_shadow_ratio or
+            shadow_difference > config.max_shadow_diff):
             return None
         
         # Calculate confidence based on shadow balance and body size
-        shadow_balance_score = (max_shadow_diff - shadow_difference) / max_shadow_diff * Decimal('40')
-        body_score = (max_body_ratio - body_ratio) / max_body_ratio * Decimal('30')
-        shadow_length_score = min(Decimal('30'), (upper_shadow_ratio + lower_shadow_ratio) * Decimal('50'))
+        shadow_balance_score = (config.max_shadow_diff - shadow_difference) / config.max_shadow_diff * config.shadow_balance_weight
+        body_score = (config.max_body_ratio - body_ratio) / config.max_body_ratio * config.body_score_weight
+        shadow_length_score = min(config.shadow_length_weight, (upper_shadow_ratio + lower_shadow_ratio) * config.shadow_length_multiplier)
         
         confidence = shadow_balance_score + body_score + shadow_length_score
         confidence = min(Decimal('100'), confidence)
@@ -397,15 +393,15 @@ class SpinningTopDetector(SinglePatternDetector):
         
         # Spinning Top is neutral with slight bias based on body color
         if candle.is_bullish:
-            bullish_prob = Decimal('0.55')
-            bearish_prob = Decimal('0.45')
+            bullish_prob = config.bullish_body_bullish_prob
+            bearish_prob = config.bullish_body_bearish_prob
         else:
-            bullish_prob = Decimal('0.45')
-            bearish_prob = Decimal('0.55')
+            bullish_prob = config.bearish_body_bullish_prob
+            bearish_prob = config.bearish_body_bearish_prob
         
         # Moderate reliability - pattern indicates indecision
-        reliability = Decimal('0.65') + (confidence - Decimal('60')) / Decimal('250')
-        reliability = min(Decimal('0.85'), max(Decimal('0.5'), reliability))
+        reliability = config.base_reliability + (confidence - Decimal('60')) / config.reliability_divisor
+        reliability = min(config.max_reliability, max(config.min_reliability, reliability))
         
         metadata = {
             "body_ratio": float(body_ratio),
@@ -442,22 +438,21 @@ class MarubozuDetector(SinglePatternDetector):
     
     def detect(self, candle: CandlestickData, volume_profile: Optional[VolumeProfile] = None) -> Optional[CandlestickPattern]:
         """Detect Marubozu pattern."""
+        config = get_pattern_config().marubozu
+        
         body_ratio = self._calculate_body_to_range_ratio(candle)
         upper_shadow_ratio = self._calculate_upper_shadow_ratio(candle)
         lower_shadow_ratio = self._calculate_lower_shadow_ratio(candle)
         
         # Marubozu requirements
-        min_body_ratio = Decimal('0.85')    # Large body (85%+ of range)
-        max_shadow_ratio = Decimal('0.05')  # Minimal shadows (5% max)
-        
-        if (body_ratio < min_body_ratio or 
-            upper_shadow_ratio > max_shadow_ratio or 
-            lower_shadow_ratio > max_shadow_ratio):
+        if (body_ratio < config.min_body_ratio or 
+            upper_shadow_ratio > config.max_shadow_ratio or 
+            lower_shadow_ratio > config.max_shadow_ratio):
             return None
         
         # Calculate confidence based on body size and lack of shadows
-        body_score = (body_ratio - min_body_ratio) / (Decimal('1') - min_body_ratio) * Decimal('60')
-        shadow_score = (max_shadow_ratio - max(upper_shadow_ratio, lower_shadow_ratio)) / max_shadow_ratio * Decimal('40')
+        body_score = (body_ratio - config.min_body_ratio) / (Decimal('1') - config.min_body_ratio) * config.body_score_weight
+        shadow_score = (config.max_shadow_ratio - max(upper_shadow_ratio, lower_shadow_ratio)) / config.max_shadow_ratio * config.shadow_score_weight
         
         confidence = body_score + shadow_score
         confidence = min(Decimal('100'), confidence)
@@ -467,15 +462,15 @@ class MarubozuDetector(SinglePatternDetector):
         
         # Marubozu strongly indicates continuation of current direction
         if candle.is_bullish:
-            bullish_prob = Decimal('0.85')
-            bearish_prob = Decimal('0.15')
+            bullish_prob = config.bullish_bullish_prob
+            bearish_prob = config.bullish_bearish_prob
         else:
-            bullish_prob = Decimal('0.15')
-            bearish_prob = Decimal('0.85')
+            bullish_prob = config.bearish_bullish_prob
+            bearish_prob = config.bearish_bearish_prob
         
         # High reliability for strong directional patterns
-        reliability = Decimal('0.8') + (confidence - Decimal('60')) / Decimal('200')
-        reliability = min(Decimal('0.95'), max(Decimal('0.7'), reliability))
+        reliability = config.base_reliability + (confidence - Decimal('60')) / config.reliability_divisor
+        reliability = min(config.max_reliability, max(config.min_reliability, reliability))
         
         metadata = {
             "body_ratio": float(body_ratio),

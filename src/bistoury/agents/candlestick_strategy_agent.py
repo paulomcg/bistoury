@@ -37,7 +37,7 @@ from ..models.market_data import Timeframe
 
 @dataclass
 class CandlestickStrategyConfig:
-    """Configuration for the candlestick strategy agent."""
+    """Configuration for the candlestick strategy agent. Loads from centralized config files."""
     
     # Market data configuration
     symbols: List[str] = field(default_factory=lambda: ["BTC", "ETH"])
@@ -77,6 +77,61 @@ class CandlestickStrategyConfig:
 
     def to_yaml(self):
         return yaml.dump(self.to_dict())
+    
+    @classmethod
+    def from_config_manager(cls) -> 'CandlestickStrategyConfig':
+        """Create configuration from centralized config manager."""
+        try:
+            from ..config_manager import get_config_manager
+            config_manager = get_config_manager()
+            
+            # Pattern strength mapping
+            strength_map = {
+                "weak": PatternStrength.WEAK,
+                "moderate": PatternStrength.MODERATE,
+                "strong": PatternStrength.STRONG
+            }
+            
+            # Narrative style mapping  
+            style_map = {
+                "technical": NarrativeStyle.TECHNICAL,
+                "TECHNICAL": NarrativeStyle.TECHNICAL,
+                "casual": NarrativeStyle.CASUAL,
+                "CASUAL": NarrativeStyle.CASUAL,
+                "formal": NarrativeStyle.FORMAL,
+                "FORMAL": NarrativeStyle.FORMAL
+            }
+            
+            # Load from config
+            return cls(
+                symbols=config_manager.get_list('agents', 'candlestick_strategy', 'symbols', default=['BTC', 'ETH']),
+                timeframes=config_manager.get_list('agents', 'candlestick_strategy', 'timeframes', default=['1m', '5m', '15m']),
+                min_confidence_threshold=config_manager.get_float('agents', 'candlestick_strategy', 'min_confidence_threshold', default=0.60),
+                min_pattern_strength=strength_map.get(
+                    config_manager.get('agents', 'candlestick_strategy', 'min_pattern_strength', default='moderate'),
+                    PatternStrength.MODERATE
+                ),
+                enable_single_patterns=config_manager.get_bool('agents', 'candlestick_strategy', 'enable_single_patterns', default=True),
+                enable_multi_patterns=config_manager.get_bool('agents', 'candlestick_strategy', 'enable_multi_patterns', default=True),
+                signal_expiry_minutes=config_manager.get_int('agents', 'candlestick_strategy', 'signal_expiry_minutes', default=15),
+                max_signals_per_symbol=config_manager.get_int('agents', 'candlestick_strategy', 'max_signals_per_symbol', default=3),
+                narrative_style=style_map.get(
+                    config_manager.get('agents', 'candlestick_strategy', 'narrative', 'style', default='technical'),
+                    NarrativeStyle.TECHNICAL
+                ),
+                include_technical_details=config_manager.get_bool('agents', 'candlestick_strategy', 'narrative', 'include_technical_details', default=True),
+                include_risk_metrics=config_manager.get_bool('agents', 'candlestick_strategy', 'narrative', 'include_risk_metrics', default=True),
+                max_data_buffer_size=config_manager.get_int('agents', 'candlestick_strategy', 'max_data_buffer_size', default=1000),
+                data_cleanup_interval_seconds=config_manager.get_int('agents', 'candlestick_strategy', 'data_cleanup_interval_seconds', default=300),
+                health_check_interval_seconds=config_manager.get_int('agents', 'candlestick_strategy', 'health_check_interval_seconds', default=30),
+                agent_name=config_manager.get('agents', 'candlestick_strategy', 'agent_name', default='candlestick_strategy'),
+                agent_version=config_manager.get('agents', 'candlestick_strategy', 'agent_version', default='1.0.0')
+            )
+        except Exception as e:
+            # Fallback to defaults if config loading fails
+            import logging
+            logging.warning(f"Failed to load agent config from centralized manager: {e}")
+            return cls()
 
 
 @dataclass
@@ -463,9 +518,18 @@ class CandlestickStrategyAgent(BaseAgent):
             self.logger.info(f"📊 Data quality score: {analysis_result.data_quality_score}")
             self.logger.info(f"⏱️ Meets latency requirement: {analysis_result.meets_latency_requirement}")
             
-            # Check if analysis meets our criteria (lowered quality threshold for testing)
+            # Check if analysis meets our criteria
             has_patterns = analysis_result.total_patterns_detected > 0
-            meets_quality = analysis_result.data_quality_score >= Decimal("20")  # Lowered from 60 for testing
+            
+            # Load quality threshold from centralized config
+            try:
+                from ..config_manager import get_config_manager
+                config_manager = get_config_manager()
+                quality_threshold = config_manager.get_decimal('strategy', 'timeframe_analysis', 'data_quality_threshold', default=20)  # Default 20 for testing
+            except Exception:
+                quality_threshold = Decimal("20")  # Fallback default for testing
+                
+            meets_quality = analysis_result.data_quality_score >= quality_threshold
             meets_latency = analysis_result.meets_latency_requirement
             
             self.logger.info(f"🎯 Analysis criteria: has_patterns={has_patterns}, meets_quality={meets_quality}, meets_latency={meets_latency}")

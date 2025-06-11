@@ -1,0 +1,54 @@
+{
+  "market_data": {
+    "supported_symbols": ["BTC", "ETH", "SOL", "AVAX", "MATIC"],
+    "default_symbols": ["BTC", "ETH"],
+    "supported_timeframes": ["1m", "5m", "15m", "1h", "4h", "1d"],
+    "default_timeframes": ["1m", "5m", "15m"],
+    "data_source": "hyperliquid",
+    "reconnection_attempts": 5,
+    "reconnection_delay_seconds": 2,
+    "heartbeat_interval_seconds": 30,
+    "max_reconnection_delay_seconds": 60
+  },
+  "position_management": {
+    "max_positions_per_symbol": 1,
+    "max_total_positions": 10,
+    "position_sizing_method": "fixed_percentage",
+    "default_position_size_pct": 2.0,
+    "max_position_size_pct": 10.0,
+    "min_position_size_usd": 10.0,
+    "enable_position_scaling": false
+  },
+  "risk_management": {
+    "global_stop_loss_pct": 5.0,
+    "daily_loss_limit_pct": 10.0,
+    "max_drawdown_pct": 20.0,
+    "enable_global_risk_limits": true,
+    "risk_free_rate": 0.02,
+    "correlation_threshold": 0.7,
+    "max_correlated_positions": 3
+  },
+  "execution": {
+    "order_type": "market",
+    "execution_delay_ms": 100,
+    "max_slippage_pct": 0.1,
+    "enable_partial_fills": true,
+    "order_timeout_seconds": 30,
+    "retry_failed_orders": true,
+    "max_order_retries": 3
+  },
+  "fees": {
+    "maker_fee_rate": 0.0002,
+    "taker_fee_rate": 0.0005,
+    "include_fees_in_pnl": true,
+    "fee_currency": "USD"
+  },
+  "logging": {
+    "trade_log_level": "INFO",
+    "market_data_log_level": "WARNING",
+    "strategy_log_level": "INFO",
+    "enable_trade_history": true,
+    "enable_performance_metrics": true,
+    "log_rotation_days": 7
+  }
+} 

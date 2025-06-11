@@ -1,0 +1,43 @@
+{
+  "candlestick_strategy": {
+    "agent_name": "candlestick_strategy",
+    "agent_version": "1.0.0",
+    "symbols": ["BTC", "ETH"],
+    "timeframes": ["1m", "5m", "15m"],
+    "min_confidence_threshold": 0.60,
+    "min_pattern_strength": "moderate",
+    "enable_single_patterns": true,
+    "enable_multi_patterns": true,
+    "signal_expiry_minutes": 15,
+    "max_signals_per_symbol": 3,
+    "max_data_buffer_size": 1000,
+    "data_cleanup_interval_seconds": 300,
+    "health_check_interval_seconds": 30,
+    "narrative": {
+      "style": "TECHNICAL",
+      "include_technical_details": true,
+      "include_risk_metrics": true
+    }
+  },
+  "paper_trading": {
+    "agent_name": "paper_trading_engine",
+    "agent_version": "1.0.0",
+    "initial_balance": 100000.0,
+    "max_concurrent_positions": 5,
+    "position_size_pct": 2.0,
+    "commission_rate": 0.001,
+    "slippage_pct": 0.05,
+    "log_level": "INFO",
+    "enable_detailed_logging": true,
+    "save_trade_history": true
+  },
+  "signal_manager": {
+    "agent_name": "signal_manager",
+    "agent_version": "1.0.0",
+    "max_signal_queue_size": 1000,
+    "signal_processing_interval_ms": 100,
+    "duplicate_signal_window_seconds": 30,
+    "enable_signal_filtering": true,
+    "enable_signal_aggregation": true
+  }
+} 

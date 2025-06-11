@@ -1,0 +1,98 @@
+{
+  "description": "Centralized Configuration System Index",
+  "version": "1.0.0",
+  "created": "2024-12-19",
+  "last_updated": "2024-12-19",
+  "system": "Bistoury Trading System",
+  
+  "configuration_files": {
+    "pattern_detection.json": {
+      "description": "Pattern detection thresholds and parameters",
+      "scope": "Individual candlestick pattern configurations",
+      "key_sections": [
+        "doji", "hammer", "shooting_star", "spinning_top", "marubozu",
+        "engulfing", "harami", "piercing_line", "dark_cloud_cover", 
+        "morning_star", "evening_star"
+      ],
+      "most_tweaked": ["engulfing.min_engulfing_ratio", "default_min_confidence"]
+    },
+    
+    "strategy.json": {
+      "description": "Strategy-level analysis and trading logic",
+      "scope": "High-level trading strategy parameters",
+      "key_sections": [
+        "timeframe_analysis", "pattern_detection", "volume_analysis",
+        "risk_management", "signal_generation", "performance", "narrative"
+      ],
+      "most_tweaked": ["timeframe_analysis.data_quality_threshold", "pattern_detection.single_pattern_confidence_threshold"]
+    },
+    
+    "agents.json": {
+      "description": "Agent-specific configurations",
+      "scope": "Individual trading agent settings",
+      "key_sections": [
+        "candlestick_strategy", "paper_trading", "signal_manager"
+      ],
+      "most_tweaked": ["candlestick_strategy.symbols", "candlestick_strategy.min_confidence_threshold"]
+    },
+    
+    "trading.json": {
+      "description": "Trading and market data settings", 
+      "scope": "Execution, risk management, and market data",
+      "key_sections": [
+        "market_data", "position_management", "risk_management",
+        "execution", "fees", "logging"
+      ],
+      "most_tweaked": ["position_management.default_position_size_pct", "risk_management.global_stop_loss_pct"]
+    }
+  },
+  
+  "configuration_hierarchy": {
+    "1_pattern_detection": "Low-level pattern recognition parameters",
+    "2_strategy": "Mid-level strategy and analysis logic",  
+    "3_agents": "High-level agent behavior and settings",
+    "4_trading": "System-level trading and risk parameters"
+  },
+  
+  "quick_access_api": {
+    "get_pattern_config(pattern, param)": "Pattern detection parameters",
+    "get_strategy_config(*keys)": "Strategy configuration values",
+    "get_agent_config(agent, *keys)": "Agent configuration values",
+    "get_trading_config(*keys)": "Trading configuration values"
+  },
+  
+  "validation_rules": {
+    "json_format": "All files must be valid JSON",
+    "decimal_precision": "Numeric values as strings for precision",
+    "case_sensitivity": "All keys are case-sensitive",
+    "automatic_fallbacks": "System falls back to defaults on errors"
+  },
+  
+  "migration_status": {
+    "pattern_detection": "✅ Migrated to centralized config",
+    "strategy_config": "✅ Migrated to centralized config", 
+    "agent_config": "✅ Migrated to centralized config",
+    "legacy_fallbacks": "✅ Backward compatibility maintained"
+  },
+  
+  "common_tweaks": {
+    "more_sensitive_patterns": {
+      "strategy.pattern_detection.single_pattern_confidence_threshold": "30.0",
+      "strategy.pattern_detection.multi_pattern_confidence_threshold": "20.0",
+      "strategy.timeframe_analysis.data_quality_threshold": "30.0"
+    },
+    "less_sensitive_patterns": {
+      "strategy.pattern_detection.single_pattern_confidence_threshold": "70.0", 
+      "strategy.pattern_detection.multi_pattern_confidence_threshold": "60.0",
+      "strategy.timeframe_analysis.data_quality_threshold": "80.0"
+    },
+    "conservative_risk": {
+      "trading.risk_management.global_stop_loss_pct": "2.0",
+      "trading.position_management.default_position_size_pct": "1.0"
+    },
+    "aggressive_risk": {
+      "trading.risk_management.global_stop_loss_pct": "8.0",
+      "trading.position_management.default_position_size_pct": "5.0"
+    }
+  }
+} 
