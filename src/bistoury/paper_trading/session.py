@@ -7,7 +7,9 @@ import asyncio
 import signal
 import sys
 from datetime import datetime, timezone, timedelta
-from typing import Optional
+from typing import Dict, Any, Optional
+from decimal import Decimal
+import time
 
 import click
 from rich.console import Console
@@ -40,12 +42,99 @@ async def run_historical_paper_trading(
     speed: float,
     min_confidence: float,
     config: Config,
-    logger
+    logger,
+    live_mode: bool = False
 ) -> None:
     """Run a historical paper trading session using the orchestrator."""
     
+    # Configure logging based on mode - VERY EARLY suppression for live mode
+    import logging
+    root_logger = logging.getLogger()
+    original_level = root_logger.level
+    
+    if live_mode:
+        # IMMEDIATE aggressive suppression before any components are created
+        root_logger.setLevel(logging.ERROR)
+        
+        # Immediately suppress all existing loggers 
+        for name, logger_obj in logging.Logger.manager.loggerDict.items():
+            if isinstance(logger_obj, logging.Logger):
+                logger_obj.setLevel(logging.ERROR)
+        
+        # Suppress specific known loggers that will be created
+        for logger_name in ['bistoury', 'bistoury.cli', 'bistoury.database', 'bistoury.database.connection', 'agent', 'agent.paper_collector', 'agent.paper_strategy', 'agent.paper_position_manager']:
+            logger = logging.getLogger(logger_name)
+            logger.setLevel(logging.ERROR)
+    
+    if live_mode:
+        # Aggressive logging suppression for clean dashboard
+        root_logger.setLevel(logging.ERROR)
+        
+        # Remove ALL console handlers from root logger and all child loggers
+        def remove_console_handlers(logger_obj):
+            for handler in logger_obj.handlers[:]:
+                if isinstance(handler, logging.StreamHandler) and handler.stream.name in ['<stdout>', '<stderr>']:
+                    logger_obj.removeHandler(handler)
+        
+        # Remove from root logger
+        remove_console_handlers(root_logger)
+        
+        # Remove from all existing loggers
+        for name, logger_obj in logging.Logger.manager.loggerDict.items():
+            if isinstance(logger_obj, logging.Logger):
+                logger_obj.setLevel(logging.ERROR)
+                remove_console_handlers(logger_obj)
+        
+        # Specifically suppress the verbose loggers
+        for logger_name in ['bistoury', 'bistoury.hyperliquid', 'bistoury.hyperliquid.collector', 'bistoury.hyperliquid.client', 'bistoury.database', 'agent']:
+            logger = logging.getLogger(logger_name)
+            logger.setLevel(logging.ERROR)
+            remove_console_handlers(logger)
+    else:
+        # Normal logging mode - DEBUG for most, INFO only for position manager
+        root_logger.setLevel(logging.DEBUG)
+        
+        # Set most loggers to DEBUG (less verbose)
+        for logger_name in ['bistoury', 'bistoury.hyperliquid', 'bistoury.hyperliquid.collector', 'bistoury.hyperliquid.client', 'bistoury.database', 'agent.paper_collector', 'agent.paper_strategy', 'agent']:
+            logger = logging.getLogger(logger_name)
+            logger.setLevel(logging.DEBUG)
+        
+        # Keep position manager at INFO for useful trading info
+        position_logger = logging.getLogger('agent.paper_position_manager')
+        position_logger.setLevel(logging.INFO)
+    
+    # Set up log capture for Rich display (only in live mode) - exact same as collector
+    if live_mode:
+        from rich.console import Console
+        from rich.logging import RichHandler
+        import io
+        from collections import deque
+        import time
+        
+        # Create log buffer for Rich display - keep more messages and add timestamps
+        log_messages = deque(maxlen=50)  # Keep last 50 error messages
+        message_timestamps = deque(maxlen=50)  # Track when each message was added
+        
+        class LogCapture(logging.Handler):
+            def emit(self, record):
+                try:
+                    # Capture WARNING+ messages for live mode
+                    if record.levelno >= logging.WARNING:
+                        msg = self.format(record)
+                        timestamp = datetime.now().strftime("%H:%M:%S")
+                        log_messages.append(f"[{timestamp}] {record.levelname}: {msg}")
+                        message_timestamps.append(time.time())  # Track when message was added
+                except Exception:
+                    pass
+
+        # Add log capture handler with appropriate level
+        log_capture = LogCapture()
+        log_capture.setLevel(logging.WARNING)
+        root_logger.addHandler(log_capture)
+    
     # Initialize components
-    console.print("🔧 Initializing components...")
+    if not live_mode:
+        console.print("🔧 Initializing components...")
     
     # Determine date range from available data
     start_date, end_date = await _get_available_date_range(symbol, timeframe)
@@ -53,7 +142,8 @@ async def run_historical_paper_trading(
         console.print("[red]❌ No historical data available[/red]")
         return
     
-    console.print(f"📅 Using available data: {start_date.strftime('%Y-%m-%d %H:%M')} to {end_date.strftime('%Y-%m-%d %H:%M')}")
+    if not live_mode:
+        console.print(f"📅 Using available data: {start_date.strftime('%Y-%m-%d %H:%M')} to {end_date.strftime('%Y-%m-%d %H:%M')}")
     
     # Initialize message bus and registry
     message_bus = MessageBus(enable_persistence=False)
@@ -82,6 +172,39 @@ async def run_historical_paper_trading(
         message_bus=message_bus
     )
     
+    # Apply logging configuration AFTER agent creation
+    if live_mode:
+        # Re-apply aggressive suppression after agent creation for live mode
+        def remove_console_handlers(logger_obj):
+            for handler in logger_obj.handlers[:]:
+                if isinstance(handler, logging.StreamHandler) and handler.stream.name in ['<stdout>', '<stderr>']:
+                    logger_obj.removeHandler(handler)
+        
+        # Suppress ALL agent loggers aggressively
+        for name, logger_obj in logging.Logger.manager.loggerDict.items():
+            if isinstance(logger_obj, logging.Logger):
+                logger_obj.setLevel(logging.ERROR)
+                remove_console_handlers(logger_obj)
+        
+        # Extra suppression for specific agent loggers
+        for logger_name in ['agent.paper_collector', 'agent.paper_strategy', 'agent.paper_position_manager', 'agent']:
+            logger = logging.getLogger(logger_name)
+            logger.setLevel(logging.ERROR)
+            remove_console_handlers(logger)
+    else:
+        # Set most loggers to DEBUG (less verbose)
+        for logger_name in ['bistoury', 'bistoury.hyperliquid', 'bistoury.hyperliquid.collector', 'bistoury.hyperliquid.client', 'bistoury.database', 'agent.paper_collector', 'agent']:
+            logger = logging.getLogger(logger_name)
+            logger.setLevel(logging.DEBUG)
+        
+        # Strategy agent is very verbose - set to WARNING to only show important messages
+        strategy_logger = logging.getLogger('agent.paper_strategy')
+        strategy_logger.setLevel(logging.WARNING)
+        
+        # Keep position manager at INFO for useful trading info
+        position_logger = logging.getLogger('agent.paper_position_manager')
+        position_logger.setLevel(logging.INFO)
+    
     # Register agents with orchestrator
     for agent in agents:
         # Convert BaseAgent to AgentRegistration for registry
@@ -90,11 +213,27 @@ async def run_historical_paper_trading(
         
         # Set up message bus subscriptions for each agent
         await _setup_agent_subscriptions(agent, message_bus)
+        
+        # Debug: check if agent is connected to message bus (only in non-live mode)
+        if not live_mode:
+            if hasattr(agent, '_message_bus'):
+                console.print(f"✅ {agent.name} connected to message bus")
+            else:
+                console.print(f"❌ {agent.name} NOT connected to message bus")
+        
+        # Connect agent to message bus explicitly
+        if hasattr(agent, 'set_message_bus'):
+            agent.set_message_bus(message_bus)
+            if not live_mode:
+                console.print(f"🔗 {agent.name} message bus connection set explicitly")
     
-    console.print("✅ Components initialized")
+    if not live_mode:
+        console.print("✅ Components initialized")
     
     # Start the session
-    console.print("🚀 Starting paper trading session...")
+    if not live_mode:
+        console.print("🚀 Starting paper trading session...")
+    start_time = asyncio.get_event_loop().time()
     
     # Set up signal handling for graceful shutdown
     shutdown_event = asyncio.Event()
@@ -109,14 +248,56 @@ async def run_historical_paper_trading(
             asyncio.get_event_loop().add_signal_handler(sig, signal_handler)
     
     try:
-        # Start all agents via orchestrator
-        await orchestrator.start_all_agents()
+        # Start orchestrator and all agents
+        await orchestrator.start()
         
-        # Create live display for session monitoring
-        with Live(_create_session_display(agents), refresh_per_second=1) as live:
-            # Run for specified duration or until shutdown
-            start_time = asyncio.get_event_loop().time()
+        # Explicitly start all agents
+        if not live_mode:
+            console.print("🔄 Starting individual agents...")
+        for agent in agents:
+            if not live_mode:
+                console.print(f"🚀 Starting agent: {agent.name}")
+            try:
+                if hasattr(agent, 'start'):
+                    start_result = await agent.start()
+                    if not live_mode:
+                        console.print(f"  ✅ {agent.name} started: {start_result}")
+                else:
+                    if not live_mode:
+                        console.print(f"  ⚠️  {agent.name} has no start method")
+            except Exception as e:
+                if not live_mode:
+                    console.print(f"  ❌ Failed to start {agent.name}: {e}")
+        
+        # Final aggressive logging suppression for live mode after agent startup
+        if live_mode:
+            def remove_console_handlers_final(logger_obj):
+                for handler in logger_obj.handlers[:]:
+                    if isinstance(handler, logging.StreamHandler) and handler.stream.name in ['<stdout>', '<stderr>']:
+                        logger_obj.removeHandler(handler)
             
+            # Final pass to suppress any logging that was created during agent startup
+            for name, logger_obj in logging.Logger.manager.loggerDict.items():
+                if isinstance(logger_obj, logging.Logger):
+                    logger_obj.setLevel(logging.ERROR)
+                    remove_console_handlers_final(logger_obj)
+            
+            # Set root logger to ERROR one more time
+            root_logger.setLevel(logging.ERROR)
+        
+        if live_mode:
+            # Live mode - create rich dashboard
+            await _run_live_mode_session(agents, message_bus, duration, start_time, shutdown_event, log_messages, message_timestamps)
+        else:
+            # Regular mode - normal logging with periodic updates
+            if not live_mode:
+                console.print("🔍 Setting up monitoring...")
+                console.print("[dim]Press Ctrl+C to stop gracefully[/dim]")
+            
+            # Monitor message bus stats in background
+            stats_task = asyncio.create_task(_monitor_message_bus_stats(message_bus, console))
+            
+            # Run for specified duration or until shutdown
             while not shutdown_event.is_set():
                 current_time = asyncio.get_event_loop().time()
                 elapsed = current_time - start_time
@@ -125,26 +306,36 @@ async def run_historical_paper_trading(
                     console.print(f"\n⏰ Session duration ({duration}s) completed")
                     break
                 
-                # Update live display
-                live.update(_create_session_display(agents, elapsed, duration))
-                
                 await asyncio.sleep(1.0)
+            
+            # Cancel monitoring
+            if 'stats_task' in locals():
+                stats_task.cancel()
                 
+        # Session completed
+        elapsed = asyncio.get_event_loop().time() - start_time
+        console.print(f"📊 Session Duration: {elapsed:.1f}s")
+        
     except KeyboardInterrupt:
         console.print("\n🛑 Session interrupted by user")
         raise
     finally:
-        # Clean shutdown
-        console.print("🔄 Stopping agents...")
-        await orchestrator.stop_all_agents()
+        # Restore original logging level
+        root_logger.setLevel(original_level)
         
-        console.print("📊 Generating session report...")
-        await _generate_session_report(agents)
+        if not live_mode:
+            console.print("🔄 Stopping agents...")
+        await orchestrator.stop()
+        
+        if not live_mode:
+            console.print("📊 Generating session report...")
+        await _generate_session_report(agents, live_mode=live_mode)
         
         await agent_registry.stop()
         await message_bus.stop()
         
-        console.print("✅ Paper trading session completed")
+        if not live_mode:
+            console.print("✅ Paper trading session completed")
 
 
 async def _create_paper_trading_agents(
@@ -177,7 +368,8 @@ async def _create_paper_trading_agents(
         hyperliquid=None,  # Not needed for historical mode
         db_manager=None,   # Will use database switcher
         config={"collector": collector_config.__dict__},
-        name="paper_collector"
+        name="paper_collector",
+        persist_state=False  # Disable state files for paper trading
     )
     collector_agent._message_bus = message_bus
     agents.append(collector_agent)
@@ -190,13 +382,30 @@ async def _create_paper_trading_agents(
         agent_name="paper_strategy"
     )
     
+    # Create strategy agent with custom persistence setting
     strategy_agent = CandlestickStrategyAgent(config=strategy_config)
+    # Disable state persistence after creation
+    strategy_agent.persist_state = False
     strategy_agent._message_bus = message_bus
     agents.append(strategy_agent)
     
-    # 3. PositionManagerAgent
+    # 3. PositionManagerAgent - Configure appropriate position sizing based on symbol
+    # For BTC: min=0.001 (about $100), max=0.1 (about $10k)
+    # For other assets, adjust accordingly
+    if symbol.upper() == "BTC":
+        min_pos_size = Decimal('0.001')  # ~$100 at $100k BTC
+        max_pos_size = Decimal('0.1')    # ~$10k at $100k BTC
+    elif symbol.upper() == "ETH":
+        min_pos_size = Decimal('0.01')   # ~$35 at $3.5k ETH
+        max_pos_size = Decimal('3.0')    # ~$10k at $3.5k ETH
+    else:
+        min_pos_size = Decimal('1.0')    # Default for other assets
+        max_pos_size = Decimal('1000.0')
+    
     position_config = PositionManagerConfig(
         initial_balance=balance,
+        min_position_size=min_pos_size,
+        max_position_size=max_pos_size,
         enable_stop_loss=True,
         enable_take_profit=True
     )
@@ -205,6 +414,8 @@ async def _create_paper_trading_agents(
         name="paper_position_manager",
         config=position_config
     )
+    # Disable state persistence after creation
+    position_agent.persist_state = False
     position_agent._message_bus = message_bus
     agents.append(position_agent)
     
@@ -242,6 +453,173 @@ async def _get_available_date_range(symbol: str, timeframe: str) -> tuple[Option
         return None, None
 
 
+async def _run_live_mode_session(agents: list, message_bus: MessageBus, duration: int, start_time: float, shutdown_event, log_messages, message_timestamps):
+    """Run the session in live mode with rich dashboard."""
+    import time
+    
+    # Track initial balance from position manager
+    initial_balance = 0
+    position_agent = None
+    for agent in agents:
+        if hasattr(agent, 'name') and 'position' in agent.name.lower():
+            position_agent = agent
+            if hasattr(agent, 'portfolio') and hasattr(agent.portfolio, 'total_balance'):
+                initial_balance = float(agent.portfolio.total_balance)
+            elif hasattr(agent, 'config') and hasattr(agent.config, 'initial_balance'):
+                initial_balance = float(agent.config.initial_balance)
+            break
+    
+    def create_live_display():
+        """Create the live dashboard display."""
+        # Calculate runtime
+        current_time = asyncio.get_event_loop().time()
+        elapsed = current_time - start_time
+        runtime = int(elapsed)
+        hours, remainder = divmod(runtime, 3600)
+        minutes, seconds = divmod(remainder, 60)
+        
+        # Calculate progress
+        progress = (elapsed / duration) * 100 if duration > 0 else 0
+        
+        # Create header
+        header = Panel(
+            f"[bold blue]💰 Paper Trading Session[/bold blue] | Runtime: [cyan]{hours:02d}:{minutes:02d}:{seconds:02d}[/cyan] | Progress: [green]{progress:.1f}%[/green]",
+            style="blue"
+        )
+        
+        # Create agent metrics table
+        metrics_table = Table(title="🤖 Agent Metrics", show_header=True, header_style="bold magenta")
+        metrics_table.add_column("Agent", style="cyan", width=20)
+        metrics_table.add_column("Status", justify="center", style="green", width=12)
+        metrics_table.add_column("Messages", justify="right", style="yellow", width=10)
+        metrics_table.add_column("Details", style="white", width=30)
+        
+        for agent in agents:
+            if hasattr(agent, 'name'):
+                status = "✅ Active"
+                
+                # Get message count if available
+                messages = 0
+                if hasattr(agent, 'messages_processed'):
+                    messages = agent.messages_processed
+                elif hasattr(agent, 'total_messages_received'):
+                    messages = agent.total_messages_received
+                
+                # Agent-specific details
+                details = ""
+                if 'collector' in agent.name.lower():
+                    details = "Publishing historical data"
+                elif 'strategy' in agent.name.lower():
+                    # Try to get signal count
+                    if hasattr(agent, 'signals_generated'):
+                        details = f"Signals: {agent.signals_generated}"
+                    else:
+                        details = "Analyzing patterns"
+                elif 'position' in agent.name.lower():
+                    # Try to get balance and trade info
+                    if hasattr(agent, 'portfolio') and hasattr(agent.portfolio, 'total_balance'):
+                        balance = float(agent.portfolio.total_balance)
+                        pnl = balance - initial_balance
+                        pnl_pct = (pnl / initial_balance * 100) if initial_balance > 0 else 0
+                        details = f"Balance: ${balance:,.2f} | P&L: {pnl:+.2f} ({pnl_pct:+.1f}%)"
+                    elif hasattr(agent, 'total_trades'):
+                        details = f"Trades: {agent.total_trades}"
+                    else:
+                        details = "Managing positions"
+                
+                metrics_table.add_row(
+                    agent.name,
+                    status,
+                    f"{messages:,}",
+                    details
+                )
+        
+        # Create session summary table
+        summary_table = Table(title="📊 Session Summary", show_header=True, header_style="bold yellow")
+        summary_table.add_column("Metric", style="cyan")
+        summary_table.add_column("Value", justify="right", style="green")
+        
+        summary_table.add_row("⏱️ Runtime", f"{hours:02d}:{minutes:02d}:{seconds:02d}")
+        summary_table.add_row("📈 Progress", f"{progress:.1f}%")
+        summary_table.add_row("💵 Initial Balance", f"${initial_balance:,.2f}")
+        
+        # Get current balance from position manager
+        current_balance = initial_balance
+        total_trades = 0
+        if position_agent:
+            if hasattr(position_agent, 'portfolio') and hasattr(position_agent.portfolio, 'total_balance'):
+                current_balance = float(position_agent.portfolio.total_balance)
+            if hasattr(position_agent, 'total_trades'):
+                total_trades = position_agent.total_trades
+        
+        pnl = current_balance - initial_balance
+        pnl_pct = (pnl / initial_balance * 100) if initial_balance > 0 else 0
+        
+        summary_table.add_row("💰 Current Balance", f"${current_balance:,.2f}")
+        summary_table.add_row("📊 P&L", f"[green]{pnl:+.2f}[/green] ([green]{pnl_pct:+.1f}%[/green])" if pnl >= 0 else f"[red]{pnl:+.2f}[/red] ([red]{pnl_pct:+.1f}%[/red])")
+        summary_table.add_row("🔄 Total Trades", f"{total_trades}")
+        
+        # Get message bus stats
+        # Simplified - avoid async call issue
+        messages_sent = sum(1 for agent in agents if hasattr(agent, 'messages_processed'))
+        messages_delivered = messages_sent
+        # messages_sent already calculated above
+        messages_delivered = messages_sent  # Simplified
+        
+        summary_table.add_row("📨 Messages Sent", f"{messages_sent:,}")
+        summary_table.add_row("📦 Messages Delivered", f"{messages_delivered:,}")
+        
+        # Create recent activity panel
+        current_time = time.time()
+        recent_messages = []
+        
+        # Keep messages from last 2 minutes
+        for i, (msg, msg_time) in enumerate(zip(log_messages, message_timestamps)):
+            if current_time - msg_time <= 120:  # 2 minutes
+                recent_messages.append(msg)
+        
+        # Show last 8 messages if we have them
+        display_messages = recent_messages[-8:] if len(recent_messages) > 8 else recent_messages
+        
+        log_content = "\n".join(display_messages) if display_messages else "[dim]No recent warnings or errors[/dim]"
+        activity_panel = Panel(
+            log_content,
+            title="🚨 Recent Activity",
+            style="yellow",
+            height=8
+        )
+        
+        # Create layout
+        from rich.columns import Columns
+        from rich import box
+        from rich.console import Group
+        
+        # Arrange tables side by side
+        tables_row = Columns([metrics_table, summary_table], equal=True)
+        
+        # Stack everything vertically
+        display_group = Group(
+            header,
+            tables_row,
+            activity_panel,
+            Panel("[dim]Press Ctrl+C to stop session[/dim]", box=box.ROUNDED)
+        )
+        
+        return display_group
+    
+    # Run live display
+    with Live(create_live_display(), refresh_per_second=0.5, screen=True) as live:
+        while not shutdown_event.is_set():
+            current_time = asyncio.get_event_loop().time()
+            elapsed = current_time - start_time
+            
+            if elapsed >= duration:
+                break
+            
+            live.update(create_live_display())
+            await asyncio.sleep(2)
+
+
 def _create_session_display(agents: list, elapsed: float = 0, duration: int = 60) -> Panel:
     """Create a live display panel for the session."""
     
@@ -268,13 +646,59 @@ def _create_session_display(agents: list, elapsed: float = 0, duration: int = 60
     return Panel(table, title="🚀 Live Session Monitor", border_style="green")
 
 
-async def _generate_session_report(agents: list):
+async def _generate_session_report(agents: list, live_mode: bool = False):
     """Generate and display a session report."""
     
+    if live_mode:
+        # In live mode, show a brief summary without tables
+        # Get key metrics
+        initial_balance = 0
+        current_balance = 0
+        total_trades = 0
+        signals_generated = 0
+        total_messages = 0
+        
+        for agent in agents:
+            if hasattr(agent, 'name'):
+                if 'position' in agent.name.lower():
+                    if hasattr(agent, 'config') and hasattr(agent.config, 'initial_balance'):
+                        initial_balance = float(agent.config.initial_balance)
+                    if hasattr(agent, 'portfolio') and hasattr(agent.portfolio, 'total_balance'):
+                        current_balance = float(agent.portfolio.total_balance)
+                    if hasattr(agent, 'total_trades'):
+                        total_trades = agent.total_trades
+                elif 'strategy' in agent.name.lower():
+                    if hasattr(agent, 'signals_generated'):
+                        signals_generated = agent.signals_generated
+                
+                # Count messages
+                if hasattr(agent, 'messages_processed'):
+                    total_messages += agent.messages_processed
+                elif hasattr(agent, 'total_messages_received'):
+                    total_messages += agent.total_messages_received
+        
+        pnl = current_balance - initial_balance
+        pnl_pct = (pnl / initial_balance * 100) if initial_balance > 0 else 0
+        
+        console.print("")
+        console.print("📊 [bold]Session Completed[/bold]")
+        console.print(f"💰 Final Balance: ${current_balance:,.2f} (was ${initial_balance:,.2f})")
+        console.print(f"📈 P&L: {pnl:+.2f} ({pnl_pct:+.1f}%)")
+        console.print(f"🔄 Trades: {total_trades} | 📊 Signals: {signals_generated} | 📨 Messages: {total_messages:,}")
+        console.print("✅ Paper trading session completed")
+        return
+    
+    # Regular mode - show detailed table
     table = Table(title="📋 Session Report", show_header=True)
     table.add_column("Agent", style="cyan")
     table.add_column("Status", style="green")
     table.add_column("Metrics")
+    
+    # Also track trading metrics for summary
+    initial_balance = 0
+    current_balance = 0
+    total_trades = 0
+    signals_generated = 0
     
     for agent in agents:
         if hasattr(agent, 'name'):
@@ -286,10 +710,42 @@ async def _generate_session_report(agents: list):
             except:
                 status = "❌ Error"
                 metrics = "N/A"
+            
+            # Get trading-specific metrics
+            if 'position' in agent.name.lower():
+                if hasattr(agent, 'config') and hasattr(agent.config, 'initial_balance'):
+                    initial_balance = float(agent.config.initial_balance)
+                if hasattr(agent, 'portfolio') and hasattr(agent.portfolio, 'total_balance'):
+                    current_balance = float(agent.portfolio.total_balance)
+                if hasattr(agent, 'total_trades'):
+                    total_trades = agent.total_trades
+                    metrics += f" | Trades: {total_trades}"
+            elif 'strategy' in agent.name.lower():
+                if hasattr(agent, 'signals_generated'):
+                    signals_generated = agent.signals_generated
+                    metrics += f" | Signals: {signals_generated}"
                 
             table.add_row(agent.name, status, metrics)
     
     console.print(table)
+    
+    # Add trading summary for regular mode
+    if initial_balance > 0:
+        pnl = current_balance - initial_balance
+        pnl_pct = (pnl / initial_balance * 100) if initial_balance > 0 else 0
+        
+        summary_table = Table(title="💰 Trading Summary", show_header=True)
+        summary_table.add_column("Metric", style="cyan")
+        summary_table.add_column("Value", style="green")
+        
+        summary_table.add_row("💵 Initial Balance", f"${initial_balance:,.2f}")
+        summary_table.add_row("💰 Final Balance", f"${current_balance:,.2f}")
+        summary_table.add_row("📈 P&L", f"{pnl:+.2f} ({pnl_pct:+.1f}%)")
+        summary_table.add_row("🔄 Total Trades", f"{total_trades}")
+        summary_table.add_row("📊 Signals Generated", f"{signals_generated}")
+        
+        console.print("\n")
+        console.print(summary_table)
 
 
 def _create_agent_registration(agent) -> AgentRegistration:
@@ -389,53 +845,74 @@ async def _setup_agent_subscriptions(agent, message_bus: MessageBus):
     
     # Skip if agent doesn't have handle_message method
     if not hasattr(agent, 'handle_message'):
+        print(f"⚠️  {agent.name} ({agent.agent_type.value}) - No handle_message method, skipping subscriptions")
         return
     
-    # Subscribe strategy agents to market data
-    if 'strategy' in agent.name.lower():
-        # Subscribe to specific market data topics (e.g., "market_data.BTC.15m")
-        market_data_topics = [
-            "market_data.BTC.1m", "market_data.BTC.5m", "market_data.BTC.15m",
-            "market_data.BTC.1h", "market_data.BTC.4h", "market_data.BTC.1d",
-            "market_data.ETH.1m", "market_data.ETH.5m", "market_data.ETH.15m",
-            "market_data.ETH.1h", "market_data.ETH.4h", "market_data.ETH.1d"
-        ]
-        market_data_filter = MessageFilter(
-            message_types=[MessageType.DATA_MARKET_UPDATE],
-            topics=market_data_topics
+    print(f"🔗 Setting up subscriptions for {agent.name} ({agent.agent_type.value})")
+    
+    # Let agents define their own subscription needs
+    if hasattr(agent, 'get_subscription_filters'):
+        # Agent provides its own subscription filters
+        filters = agent.get_subscription_filters()
+        print(f"  📋 Agent provided {len(filters)} custom filters")
+        for filter_config in filters:
+            await message_bus.subscribe(
+                agent_id=agent.agent_id,
+                filter=filter_config,
+                handler=agent.handle_message,
+                is_async=True
+            )
+    else:
+        # Fallback: subscribe to all message types for this agent type
+        print(f"  🔄 Using default subscriptions for agent type: {agent.agent_type.value}")
+        await _setup_default_subscriptions(agent, message_bus)
+
+
+async def _setup_default_subscriptions(agent, message_bus: MessageBus):
+    """Set up default subscriptions based on agent type."""
+    from ..agents.messaging import MessageFilter
+    from ..models.agent_messages import MessageType
+    
+    # Subscribe based on agent type, not name matching
+    if agent.agent_type.value == "strategy":
+        # Strategy agents want all market data
+        filter_config = MessageFilter(
+            message_types=[MessageType.DATA_MARKET_UPDATE]
         )
-        
         await message_bus.subscribe(
             agent_id=agent.agent_id,
-            filter=market_data_filter,
+            filter=filter_config,
             handler=agent.handle_message,
             is_async=True
         )
         
-    # Subscribe position managers to trading signals
-    elif 'position' in agent.name.lower():
-        # Subscribe to trading signals and market data
-        signal_filter = MessageFilter(
-            message_types=[MessageType.SIGNAL_GENERATED, MessageType.DATA_MARKET_UPDATE],
-            topics=["signals.BTC", "signals.ETH", "market_data.BTC.15m", "market_data.ETH.15m"]
+    elif agent.agent_type.value in ["trader", "position_manager"]:
+        # Trading agents want signals and market data
+        filter_config = MessageFilter(
+            message_types=[MessageType.SIGNAL_GENERATED, MessageType.DATA_MARKET_UPDATE]
         )
-        
         await message_bus.subscribe(
             agent_id=agent.agent_id,
-            filter=signal_filter,
+            filter=filter_config,
             handler=agent.handle_message,
             is_async=True
         )
     
-    # All agents should handle system messages
+    # All agents get system messages
     system_filter = MessageFilter(
-        message_types=[MessageType.SYSTEM_HEALTH_CHECK, MessageType.SYSTEM_CONFIG_UPDATE],
-        topics=["system.health", "system.config"]
+        message_types=[MessageType.SYSTEM_HEALTH_CHECK, MessageType.SYSTEM_CONFIG_UPDATE]
     )
-    
     await message_bus.subscribe(
         agent_id=agent.agent_id,
         filter=system_filter,
         handler=agent.handle_message,
         is_async=True
-    ) 
+    )
+
+
+async def _monitor_message_bus_stats(message_bus: MessageBus, console: Console):
+    """Monitor message bus statistics."""
+    while True:
+        await asyncio.sleep(10)  # Monitor every 10 seconds
+        stats = await message_bus.get_stats()
+        console.print(f"🔍 Message Bus Stats: {stats}") 

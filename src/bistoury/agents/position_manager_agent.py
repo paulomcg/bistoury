@@ -12,6 +12,7 @@ The Position Manager executes trades and manages positions:
 
 import asyncio
 import math
+import os
 import statistics
 from datetime import datetime, timezone, timedelta
 from decimal import Decimal, ROUND_HALF_UP
@@ -19,6 +20,7 @@ from typing import Dict, List, Optional, Any, Tuple
 from uuid import uuid4
 from pydantic import BaseModel
 from dataclasses import dataclass
+import re
 
 from .base import BaseAgent, AgentType, AgentState, AgentHealth
 from ..models.trading import (
@@ -100,11 +102,11 @@ class PerformanceAnalyzer:
     
     def __init__(self, initial_balance: Decimal):
         self.initial_balance = initial_balance
-        self.snapshots: List[PerformanceSnapshot] = []
-        self.daily_returns: List[float] = []
-        self.peak_equity = initial_balance
+        self.peak_equity = Decimal(str(initial_balance))  # Ensure Decimal type
         self.max_drawdown = Decimal('0')
         self.max_drawdown_duration = timedelta(0)
+        self.snapshots: List[PerformanceSnapshot] = []
+        self.daily_returns: List[float] = []
         self.drawdown_start: Optional[datetime] = None
         
     def add_snapshot(self, snapshot: PerformanceSnapshot) -> None:
@@ -352,44 +354,53 @@ class PositionManagerAgent(BaseAgent):
         config: Optional[PositionManagerConfig] = None,
         **kwargs
     ):
+        # Initialize base agent
         super().__init__(
             name=name,
             agent_type=AgentType.POSITION_MANAGER,
             **kwargs
         )
         
+        # Configuration
         self.config = config or PositionManagerConfig()
         
-        # Portfolio state
+        # Portfolio and trading state
         self.portfolio = PortfolioState(
             account_id=self.name,
             total_balance=self.config.initial_balance,
             available_balance=self.config.initial_balance
         )
-        
-        # Position tracking
         self.positions: Dict[str, Position] = {}
         self.executions: List[TradeExecution] = []
         self.current_prices: Dict[str, Decimal] = {}
         
-        # Performance metrics
-        self.total_trades = 0
-        self.winning_trades = 0
-        self.total_pnl = Decimal('0')
-        
-        # Enhanced Performance Analytics (Task 13.4)
+        # Performance tracking
         self.performance_analyzer = PerformanceAnalyzer(self.config.initial_balance)
-        self.last_snapshot_time: Optional[datetime] = None
+        self.total_trades = 0
+        self.total_pnl = Decimal('0')
+        self.messages_processed = 0  # Track processed messages
         
-        # Control flags
+        # Monitoring
         self._monitor_task: Optional[asyncio.Task] = None
+        self._last_snapshot = datetime.now(timezone.utc)
         
-        self.logger.info(f"Position Manager initialized with balance: {self.config.initial_balance}")
+        # Only log initialization if not in live mode
+        if not os.getenv('BISTOURY_LIVE_MODE'):
+            self.logger.info(f"Position Manager initialized with balance: {self.config.initial_balance}")
+        
+        # Update metadata
+        self.metadata.description = "Paper trading position management agent"
+        self.metadata.capabilities = [
+            "position_management", 
+            "order_execution", 
+            "risk_management"
+        ]
     
     async def _start(self) -> bool:
         """Start the position manager agent."""
         try:
-            await self._setup_subscriptions()
+            # Let the global subscription setup handle subscriptions
+            # await self._setup_subscriptions()  # Commented out - use global setup instead
             self._monitor_task = self.create_task(self._monitor_positions())
             self._set_state(AgentState.RUNNING)
             
@@ -434,7 +445,7 @@ class PositionManagerAgent(BaseAgent):
                 memory_usage=0.0,  # Could be implemented with psutil
                 error_count=0,
                 warning_count=0,
-                messages_processed=self.total_trades,
+                messages_processed=self.messages_processed,
                 tasks_completed=self.total_trades,
                 uptime_seconds=self.uptime,
                 health_score=health_score,
@@ -454,6 +465,11 @@ class PositionManagerAgent(BaseAgent):
     async def handle_message(self, message: Message) -> None:
         """Handle incoming messages from the message bus."""
         try:
+            self.logger.debug(f"🔔 PositionManager received message: type={message.type}, topic={message.topic}")
+            
+            # Increment message counter
+            self.messages_processed += 1
+            
             if message.type == MessageType.SIGNAL_GENERATED:
                 await self._handle_trading_signal(message)
             elif message.type in [MessageType.DATA_MARKET_UPDATE, MessageType.DATA_PRICE_UPDATE]:
@@ -466,33 +482,6 @@ class PositionManagerAgent(BaseAgent):
                 self.logger.debug(f"Unhandled message type: {message.type}")
         except Exception as e:
             self.logger.error(f"Error handling message: {e}", exc_info=True)
-    
-    async def _setup_subscriptions(self) -> None:
-        """Set up message subscriptions."""
-        if not self._message_bus:
-            return
-        
-        # Subscribe to trading signals
-        await self._message_bus.subscribe(
-            agent_id=self.agent_id,
-            filter=MessageFilter(
-                message_types=[MessageType.SIGNAL_GENERATED],
-                topics=["trading.signals"]
-            ),
-            handler=self._handle_trading_signal,
-            is_async=True
-        )
-        
-        # Subscribe to market data
-        await self._message_bus.subscribe(
-            agent_id=self.agent_id,
-            filter=MessageFilter(
-                message_types=[MessageType.DATA_PRICE_UPDATE],
-                topics=["market.prices"]
-            ),
-            handler=self._handle_market_data,
-            is_async=True
-        )
     
     async def _handle_trading_signal(self, message: Message) -> None:
         """Handle incoming trading signals."""
@@ -515,16 +504,44 @@ class PositionManagerAgent(BaseAgent):
         """Handle market data updates."""
         try:
             payload = message.payload
-            if hasattr(payload, 'symbol') and hasattr(payload, 'price'):
-                symbol = payload.symbol
-                price = Decimal(str(payload.price))
-                self.current_prices[symbol] = price
+            
+            # Only handle market data messages that contain price information
+            # Skip system/collection messages that use the same message type
+            if not (hasattr(payload, 'symbol') and hasattr(payload, 'price') and payload.price is not None):
+                self.logger.debug(f"🔇 Skipping market data message without price: topic={message.topic}")
+                return
+            
+            symbol = payload.symbol
+            
+            # Safer Decimal conversion
+            try:
+                if isinstance(payload.price, (int, float)):
+                    price = Decimal(str(payload.price))
+                elif isinstance(payload.price, Decimal):
+                    price = payload.price
+                else:
+                    # Handle complex objects by extracting numeric value
+                    price_str = str(payload.price)
+                    # Remove any non-numeric characters except decimal point
+                    clean_price = re.sub(r'[^\d.]', '', price_str)
+                    if clean_price:
+                        price = Decimal(clean_price)
+                    else:
+                        self.logger.warning(f"Could not extract numeric value from price: {payload.price}")
+                        return
+            except (ValueError, TypeError, Exception) as e:
+                self.logger.error(f"Failed to convert price {payload.price} to Decimal: {e}")
+                return
+            
+            self.current_prices[symbol] = price
+            self.logger.debug(f"✅ Updated current price for {symbol}: {price}")
+            
+            # Update position prices
+            if symbol in self.positions:
+                position = self.positions[symbol]
+                position.update_price(price)
+                await self._check_stop_take_profit(position)
                 
-                # Update position prices
-                if symbol in self.positions:
-                    position = self.positions[symbol]
-                    position.update_price(price)
-                    await self._check_stop_take_profit(position)
         except Exception as e:
             self.logger.error(f"Error handling market data: {e}", exc_info=True)
     
@@ -790,7 +807,7 @@ class PositionManagerAgent(BaseAgent):
         """Create a performance snapshot."""
         try:
             current_time = datetime.now(timezone.utc)
-            equity = self.portfolio.equity
+            equity = Decimal(str(self.portfolio.equity))  # Ensure it's a Decimal
             
             # Calculate current drawdown
             drawdown, drawdown_pct = self.performance_analyzer.calculate_drawdown(equity)
@@ -807,7 +824,7 @@ class PositionManagerAgent(BaseAgent):
             )
             
             self.performance_analyzer.add_snapshot(snapshot)
-            self.last_snapshot_time = current_time
+            self._last_snapshot = current_time
             
         except Exception as e:
             self.logger.error(f"Error creating performance snapshot: {e}", exc_info=True)
@@ -818,8 +835,7 @@ class PositionManagerAgent(BaseAgent):
             current_time = datetime.now(timezone.utc)
             
             # Create snapshot every hour or if no snapshot exists
-            if (not self.last_snapshot_time or 
-                current_time - self.last_snapshot_time >= timedelta(hours=1)):
+            if (current_time - self._last_snapshot >= timedelta(hours=1)):
                 await self._create_performance_snapshot()
                 
         except Exception as e:
@@ -859,7 +875,7 @@ class PositionManagerAgent(BaseAgent):
             advanced_metrics = self.performance_analyzer.get_advanced_metrics()
             
             # Current drawdown
-            drawdown, drawdown_pct = self.performance_analyzer.calculate_drawdown(self.portfolio.equity)
+            drawdown, drawdown_pct = self.performance_analyzer.calculate_drawdown(Decimal(str(self.portfolio.equity)))
             
             # Combine all metrics
             enhanced_metrics = {
@@ -903,7 +919,7 @@ class PositionManagerAgent(BaseAgent):
                 
                 # Metadata
                 'snapshots_count': len(self.performance_analyzer.snapshots),
-                'last_snapshot_time': self.last_snapshot_time.isoformat() if self.last_snapshot_time else None
+                'last_snapshot_time': self._last_snapshot.isoformat() if self._last_snapshot else None
             }
             
             return enhanced_metrics

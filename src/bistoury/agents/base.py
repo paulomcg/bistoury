@@ -7,6 +7,7 @@ along with agent state management, lifecycle control, and common functionality.
 
 import asyncio
 import logging
+import os
 import time
 import uuid
 from abc import ABC, abstractmethod
@@ -172,7 +173,9 @@ class BaseAgent(ABC):
         if self.persist_state:
             self._load_state()
         
-        self.logger.info(f"Agent {name} ({agent_type.value}) initialized")
+        # Only log initialization if not in live mode
+        if not os.getenv('BISTOURY_LIVE_MODE'):
+            self.logger.info(f"Agent {name} ({agent_type.value}) initialized")
     
     @property
     def agent_id(self) -> str:

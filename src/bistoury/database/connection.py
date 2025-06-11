@@ -31,7 +31,9 @@ class DatabaseManager:
         # Ensure database directory exists
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
         
-        logger.info(f"Database manager initialized: {self.db_path}")
+        # Only log if not in live mode (check environment flag)
+        if not os.getenv('BISTOURY_LIVE_MODE'):
+            logger.info(f"Database manager initialized: {self.db_path}")
     
     def get_connection(self, thread_name: Optional[str] = None) -> duckdb.DuckDBPyConnection:
         """Get a thread-local DuckDB connection.
@@ -232,7 +234,9 @@ def initialize_database(config: Optional[Config] = None) -> DatabaseManager:
     
     if _db_manager is None:
         _db_manager = DatabaseManager(config)
-        logger.info("Database manager initialized")
+        # Only log if not in live mode (check environment flag)
+        if not os.getenv('BISTOURY_LIVE_MODE'):
+            logger.info("Database manager initialized")
     
     return _db_manager
 

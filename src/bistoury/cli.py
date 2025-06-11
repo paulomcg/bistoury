@@ -183,16 +183,27 @@ def status(ctx: click.Context) -> None:
     default=0.5,
     help="Minimum signal confidence"
 )
+@click.option(
+    "--live",
+    is_flag=True,
+    help="Show live dashboard with real-time statistics and reduced logging"
+)
 @click.pass_context
 def paper_trade(ctx: click.Context, mode: str, symbol: str, timeframe: str, 
-                duration: int, balance: float, speed: float, min_confidence: float) -> None:
+                duration: int, balance: float, speed: float, min_confidence: float, live: bool) -> None:
     """Start paper trading (no real money)."""
+    
     config: Config = ctx.obj["config"]
     logger = ctx.obj["logger"]
     
     if mode == "live":
         click.echo("⚠️  Live paper trading not yet implemented")
         return
+    
+    # Set environment flag for live mode to signal early suppression
+    if live:
+        import os
+        os.environ['BISTOURY_LIVE_MODE'] = '1'
     
     # Import here to avoid circular imports
     import asyncio
@@ -207,9 +218,13 @@ def paper_trade(ctx: click.Context, mode: str, symbol: str, timeframe: str,
     if mode == "historical":
         click.echo(f"⚡ Speed: {speed}x")
     
-    logger.info(f"Paper trading started: mode={mode}, symbol={symbol}, duration={duration}")
+    # Only log if not in live mode to avoid noise
+    if not live:
+        logger.info(f"Paper trading started: mode={mode}, symbol={symbol}, duration={duration}")
     
     try:
+        # This will be handled inside the paper trading session function
+        
         # Run the paper trading session
         asyncio.run(run_historical_paper_trading(
             symbol=symbol,
@@ -219,7 +234,8 @@ def paper_trade(ctx: click.Context, mode: str, symbol: str, timeframe: str,
             speed=speed,
             min_confidence=min_confidence,
             config=config,
-            logger=logger
+            logger=logger,
+            live_mode=live
         ))
     except KeyboardInterrupt:
         click.echo("\n🛑 Paper trading interrupted by user")

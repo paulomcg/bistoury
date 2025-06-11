@@ -6,6 +6,7 @@ providing comprehensive data collection capabilities within the multi-agent arch
 """
 
 import asyncio
+import os
 import time
 from datetime import datetime, timezone, timedelta
 from typing import Any, Dict, List, Optional, Set, Union
@@ -148,7 +149,9 @@ class CollectorAgent(BaseAgent):
         ]
         self.metadata.dependencies = ["hyperliquid_api", "database"]
         
-        logger.info(f"CollectorAgent '{name}' initialized with {len(self.collector_config.symbols)} symbols")
+        # Only log initialization if not in live mode
+        if not os.getenv('BISTOURY_LIVE_MODE'):
+            logger.info(f"CollectorAgent '{name}' initialized with {len(self.collector_config.symbols)} symbols")
     
     async def _start(self) -> bool:
         """
@@ -158,14 +161,16 @@ class CollectorAgent(BaseAgent):
             bool: True if started successfully
         """
         try:
-            self.logger.info("Starting CollectorAgent...")
+            self.logger.info("🚀 Starting CollectorAgent...")
             
             if self.collector_config.historical_replay_mode:
                 # Historical replay mode for paper trading
-                self.logger.info(f"Starting in historical replay mode: {self.collector_config.replay_speed}x speed")
+                self.logger.info(f"📺 Starting in historical replay mode: {self.collector_config.replay_speed}x speed")
+                self.logger.info(f"📅 Replay date range: {self.collector_config.replay_start_date} to {self.collector_config.replay_end_date}")
                 
                 # Start historical replay task
                 self.create_task(self._historical_replay_loop())
+                self.logger.info("📡 Historical replay task created and started")
                 
                 # Start background tasks (but not the live collector)
                 self.create_task(self._monitor_collector_health())
@@ -200,11 +205,11 @@ class CollectorAgent(BaseAgent):
                     f"CollectorAgent started in {mode} mode with {len(self.collector_config.symbols)} symbols"
                 )
             
-            self.logger.info("CollectorAgent started successfully")
+            self.logger.info("✅ CollectorAgent started successfully")
             return True
             
         except Exception as e:
-            self.logger.error(f"Failed to start CollectorAgent: {e}")
+            self.logger.error(f"❌ Failed to start CollectorAgent: {e}", exc_info=True)
             return False
     
     async def _stop(self) -> None:
@@ -294,16 +299,18 @@ class CollectorAgent(BaseAgent):
                 # Perform health check
                 await self._health_check()
                 
-                # Check if collector has crashed
-                if not self.collector.running and self.state == AgentState.RUNNING:
-                    self.logger.warning("Collector has stopped unexpectedly")
-                    self._set_state(AgentState.ERROR)
-                    
-                    if self._message_bus:
-                        await self._send_system_message(
-                            MessageType.AGENT_ERROR,
-                            "Collector has stopped unexpectedly"
-                        )
+                # Check if collector has crashed - but not in historical replay mode
+                # In historical replay mode, the live collector is not started
+                if not self.collector_config.historical_replay_mode:
+                    if not self.collector.running and self.state == AgentState.RUNNING:
+                        self.logger.warning("Collector has stopped unexpectedly")
+                        self._set_state(AgentState.ERROR)
+                        
+                        if self._message_bus:
+                            await self._send_system_message(
+                                MessageType.AGENT_ERROR,
+                                "Collector has stopped unexpectedly"
+                            )
                 
                 # Wait for next health check
                 await asyncio.sleep(self.collector_config.health_check_interval)
@@ -561,6 +568,8 @@ class CollectorAgent(BaseAgent):
     async def _historical_replay_loop(self) -> None:
         """Replay historical candle data from database at specified speed."""
         try:
+            self.logger.info("🎬 Starting historical replay loop")
+            
             # Get database manager - switch_to_database returns DatabaseManager directly
             switcher = get_database_switcher()
             db_manager = switcher.switch_to_database('production')  # Returns DatabaseManager instance
@@ -571,6 +580,8 @@ class CollectorAgent(BaseAgent):
             # Process each symbol and timeframe
             for symbol in self.collector_config.symbols:
                 for interval in self.collector_config.intervals:
+                    
+                    self.logger.info(f"🔍 Processing {symbol} {interval}")
                     
                     # Map interval string to Timeframe enum
                     timeframe_mapping = {
@@ -583,6 +594,7 @@ class CollectorAgent(BaseAgent):
                     }
                     
                     if interval not in timeframe_mapping:
+                        self.logger.warning(f"⚠️  Unknown interval {interval}, skipping")
                         continue
                         
                     timeframe = timeframe_mapping[interval]
@@ -616,6 +628,7 @@ class CollectorAgent(BaseAgent):
                         
                         for row in rows:
                             if self._stop_event.is_set():
+                                self.logger.info("🛑 Stop event set, ending replay")
                                 return
                                 
                             # Create candlestick data
@@ -664,11 +677,12 @@ class CollectorAgent(BaseAgent):
             self.logger.info("Historical replay completed")
             
         except Exception as e:
-            self.logger.error(f"Error in historical replay loop: {e}")
+            self.logger.error(f"Error in historical replay loop: {e}", exc_info=True)
     
     async def _publish_candle_data(self, symbol: str, interval: str, candle_data: CandlestickData) -> None:
         """Publish candle data via message bus."""
         if not self._message_bus:
+            self.logger.warning(f"No message bus available for publishing {symbol} {interval} data")
             return
             
         try:
@@ -689,8 +703,10 @@ class CollectorAgent(BaseAgent):
             # Publish to topic that strategy agents expect
             topic = f"market_data.{symbol}.{interval}"
             
+            self.logger.info(f"📤 Publishing message: topic={topic}, symbol={symbol}, price={candle_data.close}")
+            
             # Use publish() method instead of send_message()
-            await self._message_bus.publish(
+            result = await self._message_bus.publish(
                 topic=topic,
                 message_type=MessageType.DATA_MARKET_UPDATE,
                 payload=payload,
@@ -698,5 +714,10 @@ class CollectorAgent(BaseAgent):
                 priority=MessagePriority.NORMAL
             )
             
+            if result:
+                self.logger.debug(f"✅ Successfully published {symbol} {interval} data")
+            else:
+                self.logger.warning(f"❌ Failed to publish {symbol} {interval} data")
+            
         except Exception as e:
-            self.logger.error(f"Error publishing candle data: {e}") 
+            self.logger.error(f"Error publishing candle data: {e}", exc_info=True) 
