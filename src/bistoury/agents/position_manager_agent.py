@@ -493,7 +493,8 @@ class PositionManagerAgent(BaseAgent):
                 return
             
             signal = message.payload
-            self.logger.info(f"Received signal: {signal.direction} {signal.symbol} ({signal.confidence})")
+            strategy_name = getattr(signal, 'strategy', 'Unknown')
+            self.logger.info(f"🎯 STRATEGY TRIGGERED: [{strategy_name}] → {signal.direction} {signal.symbol} (confidence: {signal.confidence:.2f})")
             
             if signal.confidence < 0.6:
                 return
@@ -582,7 +583,8 @@ class PositionManagerAgent(BaseAgent):
                 if (existing_position.side == PositionSide.LONG and order_side == OrderSide.BUY) or \
                    (existing_position.side == PositionSide.SHORT and order_side == OrderSide.SELL):
                     # Same direction - keep existing position, no need to trade
-                    self.logger.info(f"Already have {existing_position.side.value} position for {symbol}, ignoring duplicate {signal.direction} signal")
+                    strategy_name = getattr(signal, 'strategy', 'Unknown')
+                    self.logger.info(f"⏭️  SIGNAL IGNORED: [{strategy_name}] {signal.direction} {symbol} - already have {existing_position.side.value} position")
                     return
                 else:
                     # Opposite direction - close existing position (reversal)
@@ -682,7 +684,7 @@ class PositionManagerAgent(BaseAgent):
             
             self.portfolio.fees_paid = self.portfolio.fees_paid + commission
             
-            self.logger.info(f"Order executed: {order.side} {order.quantity} {order.symbol} @ {execution_price}")
+            self.logger.info(f"💰 ORDER EXECUTED: {order.side.value} {order.quantity} {order.symbol} @ ${execution_price:,.2f}")
             return execution
             
         except Exception as e:
@@ -719,7 +721,7 @@ class PositionManagerAgent(BaseAgent):
             self.positions[execution.symbol] = position
             self.portfolio.add_position(position)
             
-            self.logger.info(f"Created position: {position_side} {execution.quantity} {execution.symbol}")
+            self.logger.info(f"📈 POSITION OPENED: {position_side.value} {execution.quantity} {execution.symbol} @ ${execution.price:,.2f}")
             
         except Exception as e:
             self.logger.error(f"Error creating position: {e}", exc_info=True)
@@ -789,7 +791,8 @@ class PositionManagerAgent(BaseAgent):
                 # Update total balance to include realized P&L (simulating cash settlement)
                 self.portfolio.total_balance += realized_pnl
                 
-                self.logger.info(f"Position closed: {symbol} - {reason} - PnL: {realized_pnl}")
+                pnl_color = "profit" if realized_pnl > 0 else "loss"
+                self.logger.info(f"📉 POSITION CLOSED: {symbol} - {reason} - P&L: ${realized_pnl:+,.2f} ({pnl_color})")
             
         except Exception as e:
             self.logger.error(f"Error closing position: {e}", exc_info=True)

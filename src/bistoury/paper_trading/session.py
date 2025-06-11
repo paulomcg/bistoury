@@ -142,8 +142,29 @@ async def run_historical_paper_trading(
         console.print("[red]❌ No historical data available[/red]")
         return
     
-    if not live_mode:
-        console.print(f"📅 Using available data: {start_date.strftime('%Y-%m-%d %H:%M')} to {end_date.strftime('%Y-%m-%d %H:%M')}")
+    # Calculate realistic session duration based on data range and speed
+    # If duration is the default (60), use all available data instead
+    use_all_data = (duration == 60)  # Default CLI value indicates "use all data"
+    
+    if use_all_data:
+        # Calculate time span of available data in seconds
+        data_time_span = (end_date - start_date).total_seconds()
+        # Convert to replay time based on speed (higher speed = shorter session)
+        calculated_duration = int(data_time_span / speed)
+        
+        # Reasonable bounds: minimum 30 seconds, maximum 10 minutes for replay
+        calculated_duration = max(30, min(calculated_duration, 600))
+        actual_duration = calculated_duration
+        
+        if not live_mode:
+            console.print(f"📅 Using ALL available data: {start_date.strftime('%Y-%m-%d %H:%M')} to {end_date.strftime('%Y-%m-%d %H:%M')}")
+            console.print(f"⏱️  Calculated session duration: {actual_duration}s (data span: {data_time_span:.0f}s @ {speed}x speed)")
+    else:
+        # Use specified duration
+        actual_duration = duration
+        if not live_mode:
+            console.print(f"📅 Using available data: {start_date.strftime('%Y-%m-%d %H:%M')} to {end_date.strftime('%Y-%m-%d %H:%M')}")
+            console.print(f"⏱️  Using specified duration: {actual_duration}s")
     
     # Initialize message bus and registry
     message_bus = MessageBus(enable_persistence=False)
@@ -287,7 +308,7 @@ async def run_historical_paper_trading(
         
         if live_mode:
             # Live mode - create rich dashboard
-            await _run_live_mode_session(agents, message_bus, duration, start_time, shutdown_event, log_messages, message_timestamps)
+            await _run_live_mode_session(agents, message_bus, actual_duration, start_time, shutdown_event, log_messages, message_timestamps)
         else:
             # Regular mode - normal logging with periodic updates
             if not live_mode:
@@ -329,8 +350,8 @@ async def run_historical_paper_trading(
                 current_time = asyncio.get_event_loop().time()
                 elapsed = current_time - start_time
                 
-                if elapsed >= duration:
-                    console.print(f"\n⏰ Session duration ({duration}s) completed")
+                if elapsed >= actual_duration:
+                    console.print(f"\n⏰ Session duration ({actual_duration}s) completed")
                     break
                 
                 await asyncio.sleep(1.0)

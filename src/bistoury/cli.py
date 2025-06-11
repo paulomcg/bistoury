@@ -163,7 +163,7 @@ def status(ctx: click.Context) -> None:
     "-d",
     type=int,
     default=60,
-    help="Trading duration in seconds"
+    help="Trading duration in seconds (default: use all available data)"
 )
 @click.option(
     "--balance",

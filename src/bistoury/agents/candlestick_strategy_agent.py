@@ -645,7 +645,8 @@ class CandlestickStrategyAgent(BaseAgent):
                 
             self.performance_metrics.last_signal_time = datetime.now(timezone.utc)
             
-            self.logger.info(f"Published trading signal for {symbol}: {signal.signal_id}")
+            strategy_name = getattr(self.config, 'agent_name', self.name)
+            self.logger.info(f"🚀 STRATEGY SIGNAL: [{strategy_name}] published {signal.direction.value} signal for {symbol} (ID: {signal.signal_id})")
             
         except Exception as e:
             self.logger.error(f"Error publishing signal for {symbol}: {e}")
