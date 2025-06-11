@@ -572,12 +572,17 @@ class PositionManagerAgent(BaseAgent):
             if position_size <= 0:
                 return
             
-            # Close existing opposite position
+            # Close any existing open position for this symbol (only one position per asset)
             existing_position = self.positions.get(symbol)
             if existing_position and existing_position.is_open:
+                # Determine close reason based on signal direction
                 if (existing_position.side == PositionSide.LONG and order_side == OrderSide.SELL) or \
                    (existing_position.side == PositionSide.SHORT and order_side == OrderSide.BUY):
-                    await self._close_position(symbol, current_price, "signal_reversal")
+                    close_reason = "signal_reversal"
+                else:
+                    close_reason = "position_replacement"
+                
+                await self._close_position(symbol, current_price, close_reason)
             
             # Create and execute order
             order = Order(
