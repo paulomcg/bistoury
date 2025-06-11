@@ -136,6 +136,7 @@ class CollectorAgent(BaseAgent):
         self._last_stats_update = datetime.now(timezone.utc)
         self._last_data_publish = datetime.now(timezone.utc)
         self._collection_start_time: Optional[datetime] = None
+        self.replay_completed = False  # Track historical replay completion
         
         # Update metadata
         self.metadata.description = "Real-time market data collection agent"
@@ -675,6 +676,16 @@ class CollectorAgent(BaseAgent):
                         self.logger.error(f"Error replaying {symbol} {interval}: {e}")
                         
             self.logger.info("Historical replay completed")
+            
+            # Mark replay as complete
+            self.replay_completed = True
+            
+            # Signal completion to the session manager
+            if self._message_bus:
+                await self._send_system_message(
+                    MessageType.SYSTEM_HISTORICAL_REPLAY_COMPLETE,
+                    f"Historical replay completed for {len(self.collector_config.symbols)} symbols"
+                )
             
         except Exception as e:
             self.logger.error(f"Error in historical replay loop: {e}", exc_info=True)

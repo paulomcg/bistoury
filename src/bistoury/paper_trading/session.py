@@ -297,8 +297,35 @@ async def run_historical_paper_trading(
             # Monitor message bus stats in background
             stats_task = asyncio.create_task(_monitor_message_bus_stats(message_bus, console))
             
-            # Run for specified duration or until shutdown
-            while not shutdown_event.is_set():
+            # Monitor for historical replay completion
+            replay_complete = asyncio.Event()
+            
+            async def monitor_replay_completion():
+                """Monitor for historical replay completion message."""
+                try:
+                    while not shutdown_event.is_set():
+                        # Check if any collector agent has completed replay
+                        collector_agent = None
+                        for agent in agents:
+                            if hasattr(agent, 'name') and 'collector' in agent.name.lower():
+                                collector_agent = agent
+                                break
+                        
+                        if collector_agent and hasattr(collector_agent, 'replay_completed'):
+                            if collector_agent.replay_completed:
+                                console.print("\n🎬 Historical replay completed")
+                                replay_complete.set()
+                                break
+                        
+                        await asyncio.sleep(2.0)
+                except Exception as e:
+                    console.print(f"[red]Error monitoring replay completion: {e}[/red]")
+            
+            # Start replay monitoring
+            replay_monitor_task = asyncio.create_task(monitor_replay_completion())
+            
+            # Run for specified duration or until shutdown or replay complete
+            while not shutdown_event.is_set() and not replay_complete.is_set():
                 current_time = asyncio.get_event_loop().time()
                 elapsed = current_time - start_time
                 
@@ -308,9 +335,11 @@ async def run_historical_paper_trading(
                 
                 await asyncio.sleep(1.0)
             
-            # Cancel monitoring
+            # Cancel monitoring tasks
             if 'stats_task' in locals():
                 stats_task.cancel()
+            if 'replay_monitor_task' in locals():
+                replay_monitor_task.cancel()
                 
         # Session completed
         elapsed = asyncio.get_event_loop().time() - start_time
@@ -607,9 +636,35 @@ async def _run_live_mode_session(agents: list, message_bus: MessageBus, duration
         
         return display_group
     
+    # Monitor for historical replay completion in live mode
+    replay_complete = asyncio.Event()
+    
+    async def monitor_replay_completion_live():
+        """Monitor for historical replay completion in live mode."""
+        try:
+            while not shutdown_event.is_set() and not replay_complete.is_set():
+                # Check if any collector agent has completed replay
+                collector_agent = None
+                for agent in agents:
+                    if hasattr(agent, 'name') and 'collector' in agent.name.lower():
+                        collector_agent = agent
+                        break
+                
+                if collector_agent and hasattr(collector_agent, 'replay_completed'):
+                    if collector_agent.replay_completed:
+                        replay_complete.set()
+                        break
+                
+                await asyncio.sleep(2.0)
+        except Exception as e:
+            pass  # Silent error handling in live mode
+    
+    # Start replay monitoring task
+    replay_monitor_task = asyncio.create_task(monitor_replay_completion_live())
+    
     # Run live display
     with Live(create_live_display(), refresh_per_second=0.5, screen=True) as live:
-        while not shutdown_event.is_set():
+        while not shutdown_event.is_set() and not replay_complete.is_set():
             current_time = asyncio.get_event_loop().time()
             elapsed = current_time - start_time
             
@@ -618,6 +673,10 @@ async def _run_live_mode_session(agents: list, message_bus: MessageBus, duration
             
             live.update(create_live_display())
             await asyncio.sleep(2)
+    
+    # Cancel replay monitoring
+    if 'replay_monitor_task' in locals():
+        replay_monitor_task.cancel()
 
 
 def _create_session_display(agents: list, elapsed: float = 0, duration: int = 60) -> Panel:

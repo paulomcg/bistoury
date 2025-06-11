@@ -22,6 +22,7 @@ class MessageType(str, Enum):
     SYSTEM_SHUTDOWN = "system.shutdown"
     SYSTEM_HEALTH_CHECK = "system.health_check"
     SYSTEM_CONFIG_UPDATE = "system.config_update"
+    SYSTEM_HISTORICAL_REPLAY_COMPLETE = "system.historical_replay_complete"
     
     # Agent Lifecycle Messages
     AGENT_STARTED = "agent.started"
