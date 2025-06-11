@@ -780,6 +780,9 @@ class PositionManagerAgent(BaseAgent):
                 self.portfolio.remove_position(symbol)
                 self.portfolio.realized_pnl += realized_pnl
                 
+                # Update total balance to include realized P&L (simulating cash settlement)
+                self.portfolio.total_balance += realized_pnl
+                
                 self.logger.info(f"Position closed: {symbol} - {reason} - PnL: {realized_pnl}")
             
         except Exception as e:
