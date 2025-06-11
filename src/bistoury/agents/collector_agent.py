@@ -9,7 +9,7 @@ import asyncio
 import os
 import time
 from datetime import datetime, timezone, timedelta
-from typing import Any, Dict, List, Optional, Set, Union
+from typing import Any, Dict, List, Optional, Set, Union, Tuple
 from dataclasses import dataclass, field
 
 from ..hyperliquid.collector import EnhancedDataCollector, CollectorConfig
@@ -137,6 +137,7 @@ class CollectorAgent(BaseAgent):
         self._last_data_publish = datetime.now(timezone.utc)
         self._collection_start_time: Optional[datetime] = None
         self.replay_completed = False  # Track historical replay completion
+        self._last_published_candle_ts: Dict[Tuple[str, str], datetime] = {}
         
         # Update metadata
         self.metadata.description = "Real-time market data collection agent"
@@ -697,6 +698,12 @@ class CollectorAgent(BaseAgent):
             return
             
         try:
+            if (symbol, interval) in self._last_published_candle_ts and self._last_published_candle_ts[(symbol, interval)] == candle_data.timestamp:
+                # Duplicate/in-progress candle, skip publishing to avoid unfinished updates
+                return
+            # Record this timestamp as the latest published for deduplication
+            self._last_published_candle_ts[(symbol, interval)] = candle_data.timestamp
+            
             # Create market data payload
             payload = MarketDataPayload(
                 symbol=symbol,
