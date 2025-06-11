@@ -572,17 +572,18 @@ class PositionManagerAgent(BaseAgent):
             if position_size <= 0:
                 return
             
-            # Close any existing open position for this symbol (only one position per asset)
+            # Handle existing positions for this symbol
             existing_position = self.positions.get(symbol)
             if existing_position and existing_position.is_open:
-                # Determine close reason based on signal direction
-                if (existing_position.side == PositionSide.LONG and order_side == OrderSide.SELL) or \
-                   (existing_position.side == PositionSide.SHORT and order_side == OrderSide.BUY):
-                    close_reason = "signal_reversal"
+                # Check if signal is in same direction as existing position
+                if (existing_position.side == PositionSide.LONG and order_side == OrderSide.BUY) or \
+                   (existing_position.side == PositionSide.SHORT and order_side == OrderSide.SELL):
+                    # Same direction - keep existing position, no need to trade
+                    self.logger.info(f"Already have {existing_position.side.value} position for {symbol}, ignoring duplicate {signal.direction} signal")
+                    return
                 else:
-                    close_reason = "position_replacement"
-                
-                await self._close_position(symbol, current_price, close_reason)
+                    # Opposite direction - close existing position (reversal)
+                    await self._close_position(symbol, current_price, "signal_reversal")
             
             # Create and execute order
             order = Order(
