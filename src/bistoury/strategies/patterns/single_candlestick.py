@@ -125,20 +125,30 @@ class DojiDetector(SinglePatternDetector):
         upper_shadow_ratio = self._calculate_upper_shadow_ratio(candle)
         lower_shadow_ratio = self._calculate_lower_shadow_ratio(candle)
         
-        # Doji requires very small body relative to range
-        max_body_ratio = Decimal('0.05')  # 5% of range
+        # Doji requires very small body relative to range (made more restrictive)
+        max_body_ratio = Decimal('0.02')  # 2% of range (reduced from 5%)
         
         if body_ratio > max_body_ratio:
             return None
         
+        # Also require meaningful range (avoid noise on flat markets)
+        total_range = candle.high - candle.low
+        min_range_ratio = Decimal('0.005')  # 0.5% of price
+        range_ratio = total_range / candle.close
+        if range_ratio < min_range_ratio:
+            return None
+        
         # Calculate confidence based on how small the body is
-        body_score = (max_body_ratio - body_ratio) / max_body_ratio * Decimal('100')
+        body_score = (max_body_ratio - body_ratio) / max_body_ratio * Decimal('60')
         
         # Bonus for symmetric shadows (more indecision)
         shadow_symmetry = Decimal('1') - abs(upper_shadow_ratio - lower_shadow_ratio)
         symmetry_bonus = shadow_symmetry * Decimal('20')
         
-        confidence = min(Decimal('100'), body_score + symmetry_bonus)
+        # Bonus for good range (meaningful price movement)
+        range_bonus = min(Decimal('20'), range_ratio * Decimal('2000'))
+        
+        confidence = min(Decimal('100'), body_score + symmetry_bonus + range_bonus)
         
         if confidence < self.min_confidence:
             return None

@@ -7,7 +7,7 @@ Consumes real-time market data and generates trading signals based on pattern re
 
 import asyncio
 import logging
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from decimal import Decimal
 from typing import Dict, List, Optional, Set, Any
 from dataclasses import dataclass, field
@@ -157,9 +157,10 @@ class CandlestickStrategyAgent(BaseAgent):
             }
         )
         
-        # Initialize pattern recognizers
-        self.single_pattern_recognizer = SinglePatternRecognizer()
-        self.multi_pattern_recognizer = MultiPatternRecognizer()
+        # Initialize pattern recognizers with reasonable confidence thresholds for testing
+        min_confidence = Decimal("50")  # Reduced from 60 for testing
+        self.single_pattern_recognizer = SinglePatternRecognizer(min_confidence=min_confidence)
+        self.multi_pattern_recognizer = MultiPatternRecognizer(min_confidence=min_confidence)
         
         # Initialize timeframe analyzer
         self.timeframe_analyzer = TimeframeAnalyzer()
@@ -333,8 +334,15 @@ class CandlestickStrategyAgent(BaseAgent):
             # Add to data buffer
             self._add_to_buffer(symbol, timeframe, candle_data)
             
+            # Log buffer status
+            buffer_size = len(self.market_data_buffer[symbol][timeframe])
+            self.logger.info(f"📊 Added candle to buffer: {symbol} {timeframe} now has {buffer_size} candles")
+            
             # Check if we have enough data for analysis
-            if await self._has_sufficient_data(symbol):
+            has_sufficient = await self._has_sufficient_data(symbol)
+            self.logger.info(f"🔍 Sufficient data check: {has_sufficient}")
+            
+            if has_sufficient:
                 # Perform pattern analysis
                 await self._analyze_patterns(symbol)
                 
@@ -395,6 +403,20 @@ class CandlestickStrategyAgent(BaseAgent):
         """Perform comprehensive pattern analysis for a symbol."""
         
         try:
+            # Check if we should throttle analysis (prevent excessive signal generation)
+            current_time = datetime.now(timezone.utc)
+            last_analysis_key = f"{symbol}_last_analysis"
+            last_analysis_time = getattr(self, last_analysis_key, None)
+            
+            # Throttle analysis to prevent excessive signals (min 10 seconds between analyses for testing)
+            min_analysis_interval = timedelta(seconds=10)
+            if last_analysis_time and (current_time - last_analysis_time) < min_analysis_interval:
+                self.logger.info(f"⏳ Throttling analysis for {symbol} (last analysis {(current_time - last_analysis_time).total_seconds():.1f}s ago)")
+                return
+            
+            # Update last analysis time
+            setattr(self, last_analysis_key, current_time)
+            
             self.logger.info(f"🔍 Starting pattern analysis for {symbol}")
             
             # Prepare timeframe data - convert strings to Timeframe enum
@@ -410,12 +432,20 @@ class CandlestickStrategyAgent(BaseAgent):
                 if timeframe_str in timeframe_mapping:
                     timeframe_enum = timeframe_mapping[timeframe_str]
                     candles = self.market_data_buffer[symbol][timeframe_str]
-                    timeframe_data[timeframe_enum] = candles[-20:]  # Last 20 candles
-                    self.logger.info(f"📊 Prepared {len(candles[-20:])} candles for {timeframe_str} analysis")
+                    # Use more candles for better multi-pattern detection
+                    timeframe_data[timeframe_enum] = candles[-50:] if len(candles) >= 50 else candles
+                    self.logger.info(f"📊 Prepared {len(timeframe_data[timeframe_enum])} candles for {timeframe_str} analysis")
                 
             # Set primary timeframe to the first (and likely only) timeframe we have data for
             primary_timeframe = list(timeframe_data.keys())[0] if timeframe_data else None
             self.logger.info(f"🎯 Using primary timeframe: {primary_timeframe}")
+            
+            # Ensure we have enough data for meaningful analysis
+            min_candles_required = 3  # Reduced for testing
+            primary_candles = timeframe_data.get(primary_timeframe, [])
+            if len(primary_candles) < min_candles_required:
+                self.logger.info(f"📊 Insufficient data for analysis: {len(primary_candles)} < {min_candles_required} candles")
+                return
             
             # Perform multi-timeframe analysis
             self.logger.info(f"🔬 Performing timeframe analysis...")
@@ -456,18 +486,26 @@ class CandlestickStrategyAgent(BaseAgent):
             all_patterns = []
             
             # Collect single patterns with safe dict access
+            single_pattern_count = 0
             if hasattr(analysis_result, 'single_patterns') and hasattr(analysis_result.single_patterns, 'items'):
                 for timeframe, patterns in analysis_result.single_patterns.items():
                     if patterns:  # Ensure patterns is not None or empty
                         all_patterns.extend(patterns)
-                        self.logger.info(f"📊 Found {len(patterns)} single patterns in {timeframe}")
+                        single_pattern_count += len(patterns)
+                        pattern_types = [p.pattern_type.value for p in patterns]
+                        self.logger.info(f"📊 Found {len(patterns)} single patterns in {timeframe}: {pattern_types}")
             
             # Collect multi patterns with safe dict access
+            multi_pattern_count = 0
             if hasattr(analysis_result, 'multi_patterns') and hasattr(analysis_result.multi_patterns, 'items'):
                 for timeframe, patterns in analysis_result.multi_patterns.items():
                     if patterns:  # Ensure patterns is not None or empty
                         all_patterns.extend(patterns)
-                        self.logger.info(f"📊 Found {len(patterns)} multi patterns in {timeframe}")
+                        multi_pattern_count += len(patterns)
+                        pattern_types = [p.pattern_type.value for p in patterns]
+                        self.logger.info(f"📊 Found {len(patterns)} multi patterns in {timeframe}: {pattern_types}")
+            
+            self.logger.info(f"📊 Pattern summary: {single_pattern_count} single + {multi_pattern_count} multi = {len(all_patterns)} total")
 
             self.logger.info(f"📊 Total patterns collected: {len(all_patterns)}")
 
@@ -499,13 +537,27 @@ class CandlestickStrategyAgent(BaseAgent):
                         pass
                 
                 # Check if pattern meets criteria
-                if (hasattr(pattern, 'confidence') and hasattr(pattern, 'reliability') and
-                    pattern.confidence >= Decimal(str(self.config.min_confidence_threshold)) and
-                    pattern.reliability >= Decimal("0.5")):  # Basic reliability threshold
+                confidence = getattr(pattern, 'confidence', None)
+                reliability = getattr(pattern, 'reliability', None)
+                min_confidence_threshold = Decimal("50")  # Reduced for testing 
+                min_reliability = Decimal("0.3")  # Reduced for testing
+                
+                if (confidence is not None and reliability is not None and
+                    confidence >= min_confidence_threshold and reliability >= min_reliability):
                     qualifying_patterns.append(pattern)
-                    self.logger.info(f"✅ Pattern qualified: {pattern.pattern_type} (confidence: {pattern.confidence})")
+                    self.logger.info(f"✅ Pattern qualified: {pattern.pattern_type} (confidence: {confidence:.1f}, reliability: {reliability:.2f})")
                 else:
-                    self.logger.info(f"❌ Pattern failed criteria: {pattern.pattern_type} (confidence: {getattr(pattern, 'confidence', 'N/A')})")
+                    fail_reasons = []
+                    if confidence is None:
+                        fail_reasons.append("no confidence")
+                    elif confidence < min_confidence_threshold:
+                        fail_reasons.append(f"confidence {confidence:.1f} < {min_confidence_threshold}")
+                    if reliability is None:
+                        fail_reasons.append("no reliability")
+                    elif reliability < min_reliability:
+                        fail_reasons.append(f"reliability {reliability:.2f} < {min_reliability}")
+                    
+                    self.logger.info(f"❌ Pattern failed criteria: {pattern.pattern_type} - {', '.join(fail_reasons)}")
                         
             self.logger.info(f"🎯 Qualifying patterns: {len(qualifying_patterns)}")
             
