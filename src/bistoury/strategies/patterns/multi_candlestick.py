@@ -260,8 +260,8 @@ class HaramiDetector(MultiPatternDetector):
         first_body_size = first_body_top - first_body_bottom
         second_body_size = second_body_top - second_body_bottom
         
-        # Require substantial first candle body (at least 2% of price)
-        min_first_body_ratio = Decimal('0.02')
+        # Require substantial first candle body (at least 1% of price - more realistic)
+        min_first_body_ratio = Decimal('0.01')
         first_body_ratio = first_body_size / first_candle.close
         if first_body_ratio < min_first_body_ratio:
             return None
@@ -368,8 +368,8 @@ class PiercingLineDetector(MultiPatternDetector):
         first_body_size = first_body_top - first_body_bottom
         first_body_midpoint = (first_body_top + first_body_bottom) / Decimal('2')
         
-        # Require substantial first candle body
-        min_body_ratio = Decimal('0.015')  # 1.5% of price
+        # Require substantial first candle body (reduced for more realistic detection)
+        min_body_ratio = Decimal('0.008')  # 0.8% of price
         first_body_ratio = first_body_size / first_candle.close
         if first_body_ratio < min_body_ratio:
             return None
@@ -468,8 +468,8 @@ class DarkCloudCoverDetector(MultiPatternDetector):
         first_body_size = first_body_top - first_body_bottom
         first_body_midpoint = (first_body_top + first_body_bottom) / Decimal('2')
         
-        # Require substantial first candle body
-        min_body_ratio = Decimal('0.015')  # 1.5% of price
+        # Require substantial first candle body (reduced for more realistic detection)
+        min_body_ratio = Decimal('0.008')  # 0.8% of price
         first_body_ratio = first_body_size / first_candle.close
         if first_body_ratio < min_body_ratio:
             return None
@@ -676,8 +676,8 @@ class EveningStarDetector(MultiPatternDetector):
         star_body_size = abs(star_candle.close - star_candle.open)
         third_body_size = third_candle.open - third_candle.close  # Bearish
         
-        # Require substantial first candle body
-        min_first_body_ratio = Decimal('0.015')
+        # Require substantial first candle body (reduced for more realistic detection)
+        min_first_body_ratio = Decimal('0.008')  # 0.8% of price
         first_body_ratio = first_body_size / first_candle.close
         if first_body_ratio < min_first_body_ratio:
             return None
@@ -809,7 +809,6 @@ class MultiPatternRecognizer:
         
         # Sort by confidence (highest first)
         patterns.sort(key=lambda p: p.confidence, reverse=True)
-        
         return patterns
     
     def get_best_pattern(self, candles: List[CandlestickData], volume_profile: Optional[VolumeProfile] = None) -> Optional[CandlestickPattern]:

@@ -157,10 +157,11 @@ class CandlestickStrategyAgent(BaseAgent):
             }
         )
         
-        # Initialize pattern recognizers with reasonable confidence thresholds for testing
-        min_confidence = Decimal("50")  # Reduced from 60 for testing
-        self.single_pattern_recognizer = SinglePatternRecognizer(min_confidence=min_confidence)
-        self.multi_pattern_recognizer = MultiPatternRecognizer(min_confidence=min_confidence)
+        # Initialize pattern recognizers with different confidence thresholds for testing
+        single_min_confidence = Decimal("50")  # Keep single patterns at 50
+        multi_min_confidence = Decimal("30")   # Lower multi-patterns to 30 for testing
+        self.single_pattern_recognizer = SinglePatternRecognizer(min_confidence=single_min_confidence)
+        self.multi_pattern_recognizer = MultiPatternRecognizer(min_confidence=multi_min_confidence)
         
         # Initialize timeframe analyzer
         self.timeframe_analyzer = TimeframeAnalyzer()
@@ -485,7 +486,7 @@ class CandlestickStrategyAgent(BaseAgent):
             # Get all patterns from the analysis
             all_patterns = []
             
-            # Collect single patterns with safe dict access
+            # Collect single patterns with safe dict access and detailed logging
             single_pattern_count = 0
             if hasattr(analysis_result, 'single_patterns') and hasattr(analysis_result.single_patterns, 'items'):
                 for timeframe, patterns in analysis_result.single_patterns.items():
@@ -494,8 +495,12 @@ class CandlestickStrategyAgent(BaseAgent):
                         single_pattern_count += len(patterns)
                         pattern_types = [p.pattern_type.value for p in patterns]
                         self.logger.info(f"📊 Found {len(patterns)} single patterns in {timeframe}: {pattern_types}")
+                    else:
+                        self.logger.info(f"📊 No single patterns found in {timeframe}")
+            else:
+                self.logger.warning(f"❌ No single_patterns attribute or items method found on analysis_result")
             
-            # Collect multi patterns with safe dict access
+            # Collect multi patterns with safe dict access and detailed logging
             multi_pattern_count = 0
             if hasattr(analysis_result, 'multi_patterns') and hasattr(analysis_result.multi_patterns, 'items'):
                 for timeframe, patterns in analysis_result.multi_patterns.items():
@@ -503,7 +508,11 @@ class CandlestickStrategyAgent(BaseAgent):
                         all_patterns.extend(patterns)
                         multi_pattern_count += len(patterns)
                         pattern_types = [p.pattern_type.value for p in patterns]
-                        self.logger.info(f"📊 Found {len(patterns)} multi patterns in {timeframe}: {pattern_types}")
+                        self.logger.info(f"🔥 Found {len(patterns)} MULTI patterns in {timeframe}: {pattern_types}")
+                    else:
+                        self.logger.info(f"📊 No multi patterns found in {timeframe}")
+            else:
+                self.logger.warning(f"❌ No multi_patterns attribute or items method found on analysis_result")
             
             self.logger.info(f"📊 Pattern summary: {single_pattern_count} single + {multi_pattern_count} multi = {len(all_patterns)} total")
 
