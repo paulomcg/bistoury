@@ -168,7 +168,8 @@ class TestPositionManagerAnalytics:
         return PositionManagerConfig(
             initial_balance=Decimal('100000'),
             slippage_rate=Decimal('0.0005'),
-            commission_rate=Decimal('0.0005'),
+            taker_fee_rate=Decimal('0.00045'),  # HyperLiquid rates
+            maker_fee_rate=Decimal('0.00015'),  # HyperLiquid rates
             enable_stop_loss=True,
             enable_take_profit=True,
             stop_loss_pct=Decimal('2.0'),

@@ -326,7 +326,8 @@ class PositionManagerConfig:
         self,
         initial_balance: Decimal = Decimal('100000'),
         slippage_rate: Decimal = Decimal('0.0005'),
-        commission_rate: Decimal = Decimal('0.0005'),
+        taker_fee_rate: Decimal = Decimal('0.00045'),  # HyperLiquid: 0.045% (4.5 bps)
+        maker_fee_rate: Decimal = Decimal('0.00015'),  # HyperLiquid: 0.015% (1.5 bps)
         min_position_size: Decimal = Decimal('10'),
         max_position_size: Decimal = Decimal('10000'),
         enable_stop_loss: bool = True,
@@ -336,7 +337,8 @@ class PositionManagerConfig:
     ):
         self.initial_balance = initial_balance
         self.slippage_rate = slippage_rate
-        self.commission_rate = commission_rate
+        self.taker_fee_rate = taker_fee_rate
+        self.maker_fee_rate = maker_fee_rate
         self.min_position_size = min_position_size
         self.max_position_size = max_position_size
         self.enable_stop_loss = enable_stop_loss
@@ -632,9 +634,13 @@ class PositionManagerAgent(BaseAgent):
             else:
                 execution_price = market_price * (Decimal('1') - self.config.slippage_rate)
             
-            # Calculate commission
+            # Calculate commission based on order type
             notional = order.quantity * execution_price
-            commission = notional * self.config.commission_rate
+            # Market orders are takers, limit orders are makers
+            if order.order_type == OrderType.MARKET:
+                commission = notional * self.config.taker_fee_rate
+            else:
+                commission = notional * self.config.maker_fee_rate
             
             # Check if we have enough balance for buy orders
             if order.side == OrderSide.BUY:

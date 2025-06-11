@@ -37,7 +37,8 @@ class TestPositionManagerConfig:
         
         assert config.initial_balance == Decimal('100000')
         assert config.slippage_rate == Decimal('0.0005')
-        assert config.commission_rate == Decimal('0.0005')
+        assert config.taker_fee_rate == Decimal('0.00045')
+        assert config.maker_fee_rate == Decimal('0.00015')
         assert config.min_position_size == Decimal('10')
         assert config.max_position_size == Decimal('10000')
         assert config.enable_stop_loss is True
@@ -50,7 +51,8 @@ class TestPositionManagerConfig:
         config = PositionManagerConfig(
             initial_balance=Decimal('50000'),
             slippage_rate=Decimal('0.001'),
-            commission_rate=Decimal('0.001'),
+            taker_fee_rate=Decimal('0.001'),
+            maker_fee_rate=Decimal('0.0005'),
             min_position_size=Decimal('5'),
             max_position_size=Decimal('5000'),
             enable_stop_loss=False,
@@ -61,7 +63,8 @@ class TestPositionManagerConfig:
         
         assert config.initial_balance == Decimal('50000')
         assert config.slippage_rate == Decimal('0.001')
-        assert config.commission_rate == Decimal('0.001')
+        assert config.taker_fee_rate == Decimal('0.001')
+        assert config.maker_fee_rate == Decimal('0.0005')
         assert config.min_position_size == Decimal('5')
         assert config.max_position_size == Decimal('5000')
         assert config.enable_stop_loss is False
@@ -76,7 +79,8 @@ def position_manager_config():
     return PositionManagerConfig(
         initial_balance=Decimal('100000'),
         slippage_rate=Decimal('0.0005'),
-        commission_rate=Decimal('0.0005'),
+        taker_fee_rate=Decimal('0.00045'),  # HyperLiquid rates
+        maker_fee_rate=Decimal('0.00015'),  # HyperLiquid rates
         min_position_size=Decimal('0.001'),  # Much smaller minimum for tests
         max_position_size=Decimal('1000'),
         enable_stop_loss=True,
@@ -249,9 +253,9 @@ class TestPositionManagerAgent:
         expected_price = market_price * (Decimal('1') + position_manager.config.slippage_rate)
         assert execution.price == expected_price
         
-        # Check commission calculated
+        # Check commission calculated (market order = taker)
         notional = execution.quantity * execution.price
-        expected_commission = notional * position_manager.config.commission_rate
+        expected_commission = notional * position_manager.config.taker_fee_rate
         assert execution.commission == expected_commission
         
         # Check portfolio updated

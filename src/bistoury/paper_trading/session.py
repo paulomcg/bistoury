@@ -436,7 +436,9 @@ async def _create_paper_trading_agents(
         min_position_size=min_pos_size,
         max_position_size=max_pos_size,
         enable_stop_loss=True,
-        enable_take_profit=True
+        enable_take_profit=True,
+        taker_fee_rate=Decimal('0.00045'),  # HyperLiquid: 0.045% taker fee
+        maker_fee_rate=Decimal('0.00015')   # HyperLiquid: 0.015% maker fee
     )
     
     position_agent = PositionManagerAgent(

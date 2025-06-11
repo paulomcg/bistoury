@@ -43,7 +43,8 @@ class PositionManagerDemo:
         self.config = PositionManagerConfig(
             initial_balance=Decimal('50000'),
             slippage_rate=Decimal('0.0005'),
-            commission_rate=Decimal('0.0005'),
+            taker_fee_rate=Decimal('0.00045'),  # HyperLiquid rates
+            maker_fee_rate=Decimal('0.00015'),  # HyperLiquid rates
             min_position_size=Decimal('0.001'),
             max_position_size=Decimal('100'),
             enable_stop_loss=True,
