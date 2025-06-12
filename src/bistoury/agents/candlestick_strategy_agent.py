@@ -324,8 +324,8 @@ class CandlestickStrategyAgent(BaseAgent):
         self.logger.info(f"Starting CandlestickStrategyAgent {self.agent_id}")
         
         try:
-            # Set up data subscriptions
-            await self._setup_data_subscriptions()
+            # Skip legacy topic subscriptions - using MessageBus subscriptions instead
+            # await self._setup_data_subscriptions()
             
             # Start background tasks
             await self._start_background_tasks()

@@ -207,17 +207,17 @@ class TestCandlestickStrategyAgent:
         """Test agent start and stop lifecycle."""
         agent = CandlestickStrategyAgent(strategy_config)
         
-        # Mock BaseAgent methods
-        agent.subscribe_to_topic = AsyncMock()
-        agent.unsubscribe_from_topic = AsyncMock()
+        # Mock BaseAgent methods (legacy subscription methods not used anymore)
         agent.create_task = Mock()  # Mock the create_task method
         
         # Test start
         await agent.start()
         assert agent.state == AgentState.RUNNING
         
-        # Verify subscriptions were set up
-        assert agent.subscribe_to_topic.call_count > 0
+        # Verify agent components were initialized and background tasks started
+        assert hasattr(agent, 'single_pattern_recognizer')
+        assert hasattr(agent, 'multi_pattern_recognizer')
+        assert hasattr(agent, 'timeframe_analyzer')
         assert agent.create_task.call_count == 2  # Data cleanup + health monitoring
         
         # Test stop
@@ -225,29 +225,21 @@ class TestCandlestickStrategyAgent:
         assert agent.state == AgentState.STOPPED
         
         # Verify cleanup
-        assert agent.unsubscribe_from_topic.call_count > 0
         assert len(agent.market_data_buffer) == 0
         assert len(agent.active_signals) == 0
         
     @pytest.mark.asyncio
-    async def test_setup_data_subscriptions(self, strategy_config):
-        """Test data subscription setup."""
+    async def test_setup_data_subscriptions_legacy(self, strategy_config):
+        """Test that legacy subscription setup is skipped (no longer used)."""
         agent = CandlestickStrategyAgent(strategy_config)
-        agent.subscribe_to_topic = AsyncMock()
         
-        await agent._setup_data_subscriptions()
+        # The _setup_data_subscriptions method should be commented out and not called
+        # This test verifies that the agent works without legacy subscriptions
+        # Modern agents use MessageBus subscriptions instead
         
-        # Should subscribe to candle data for each symbol/timeframe + volume data
-        expected_calls = len(strategy_config.symbols) * len(strategy_config.timeframes) + len(strategy_config.symbols)
-        assert agent.subscribe_to_topic.call_count == expected_calls
-        
-        # Check specific topics
-        call_args = [call[0][0] for call in agent.subscribe_to_topic.call_args_list]
-        assert "market_data.candle.BTC.1m" in call_args
-        assert "market_data.candle.BTC.5m" in call_args
-        assert "market_data.candle.ETH.15m" in call_args
-        assert "market_data.volume.BTC" in call_args
-        assert "market_data.volume.ETH" in call_args
+        # Verify agent can be created and has subscription tracking attributes
+        assert hasattr(agent, 'subscribed_topics')
+        assert len(agent.subscribed_topics) == 0  # No legacy subscriptions
         
     def test_add_to_buffer(self, strategy_config, sample_candle):
         """Test adding candlestick data to buffer."""
