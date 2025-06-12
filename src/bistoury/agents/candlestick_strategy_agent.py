@@ -254,12 +254,15 @@ class CandlestickStrategyAgent(BaseAgent):
         )
         
         # Initialize components with config-driven parameters
-        self.pattern_recognizer = SinglePatternRecognizer(
+        self.single_pattern_recognizer = SinglePatternRecognizer(
             min_confidence=Decimal(str(self.config.min_confidence_threshold * 100))
         )
         self.multi_pattern_recognizer = MultiPatternRecognizer(
             min_confidence=Decimal(str(self.config.min_confidence_threshold * 100))
         )
+        
+        # Keep backward compatibility alias
+        self.pattern_recognizer = self.single_pattern_recognizer
         
         # Set version and capabilities after base initialization
         self.metadata.version = self.config.agent_version
@@ -302,7 +305,7 @@ class CandlestickStrategyAgent(BaseAgent):
         # Initialize timeframe analyzer with custom recognizers
         self.timeframe_analyzer = TimeframeAnalyzer(strategy_config)
         # Override the analyzer's recognizers with our custom ones
-        self.timeframe_analyzer.single_recognizer = self.pattern_recognizer
+        self.timeframe_analyzer.single_recognizer = self.single_pattern_recognizer
         self.timeframe_analyzer.multi_recognizer = self.multi_pattern_recognizer
         
         # Initialize pattern scoring engine
@@ -321,8 +324,8 @@ class CandlestickStrategyAgent(BaseAgent):
         self.logger.info(f"Starting CandlestickStrategyAgent {self.agent_id}")
         
         try:
-            # Skip legacy topic subscriptions - using MessageBus subscriptions instead
-            # await self._setup_data_subscriptions()
+            # Set up data subscriptions
+            await self._setup_data_subscriptions()
             
             # Start background tasks
             await self._start_background_tasks()
@@ -441,20 +444,30 @@ class CandlestickStrategyAgent(BaseAgent):
         """Handle incoming market data updates."""
         payload = message.payload
         
-        # Extract data details from the MarketDataPayload object
-        # Data is stored in the 'data' dictionary within the payload
+        # Handle both MarketDataPayload objects and plain dict payloads (for tests)
         if hasattr(payload, 'data') and isinstance(payload.data, dict):
+            # MarketDataPayload object format
             data_type = payload.data.get("data_type")
             timeframe = payload.data.get("timeframe")
             symbol = payload.symbol  # This is a direct attribute
+            data_payload = payload.data
+        elif isinstance(payload, dict):
+            # Plain dict format (used in tests)
+            data_type = payload.get("data_type")
+            timeframe = payload.get("timeframe")
+            symbol = payload.get("symbol")
+            data_payload = payload
+        else:
+            self.logger.warning(f"Unknown payload format: {type(payload)}")
+            return
             
-            self.logger.info(f"📊 Strategy received market data: {symbol} {timeframe} ({data_type})")
+        self.logger.info(f"📊 Strategy received market data: {symbol} {timeframe} ({data_type})")
+        
+        if data_type == "candle" and symbol in self.config.symbols:
+            await self._process_candlestick_data(symbol, timeframe, data_payload)
             
-            if data_type == "candlestick" and symbol in self.config.symbols:
-                await self._process_candlestick_data(symbol, timeframe, payload.data)
-                
-            elif data_type == "volume" and symbol in self.config.symbols:
-                await self._process_volume_data(symbol, payload.data)
+        elif data_type == "volume" and symbol in self.config.symbols:
+            await self._process_volume_data(symbol, data_payload)
             
     async def _process_candlestick_data(self, symbol: str, timeframe: str, payload: Dict[str, Any]):
         """Process new candlestick data and perform pattern analysis."""
@@ -706,6 +719,10 @@ class CandlestickStrategyAgent(BaseAgent):
                         
             self.logger.info(f"🎯 Qualifying patterns: {len(qualifying_patterns)}")
             
+            # Update patterns detected metric
+            if len(all_patterns) > 0:
+                self.performance_metrics.patterns_detected += len(all_patterns)
+            
             if qualifying_patterns:
                 # Get best pattern for signal generation
                 best_pattern = max(qualifying_patterns, key=lambda p: p.confidence)
@@ -718,6 +735,11 @@ class CandlestickStrategyAgent(BaseAgent):
                     self.logger.info(f"📈 Signal created: {signal.direction} at {signal.price}")
                     await self._publish_signal(symbol, signal)
                     self.performance_metrics.signals_generated += 1
+                    
+                    # Check if this is a high confidence signal
+                    if float(signal.confidence) >= 75.0:
+                        self.performance_metrics.high_confidence_signals += 1
+                    
                     self.logger.info(f"🚀 Signal published successfully!")
                 else:
                     self.logger.warning(f"⚠️ Failed to create signal from pattern")
@@ -826,7 +848,7 @@ class CandlestickStrategyAgent(BaseAgent):
                 timestamp=signal.timestamp
             )
             
-            # Publish via message bus
+            # Publish via message bus or fallback to publish_message
             if self._message_bus:
                 result = await self._message_bus.publish(
                     topic=f"signals.{symbol}",
@@ -841,7 +863,14 @@ class CandlestickStrategyAgent(BaseAgent):
                 else:
                     self.logger.warning(f"❌ Failed to publish signal to topic: signals.{symbol}")
             else:
-                self.logger.error("❌ No message bus available for signal publishing")
+                # Fallback to publish_message method (used in tests and when no message bus is available)
+                await self.publish_message(
+                    message_type=MessageType.SIGNAL_GENERATED,
+                    payload=signal_payload,
+                    topic=f"signals.{symbol}",
+                    priority=MessagePriority.HIGH
+                )
+                self.logger.info(f"✅ Published signal via publish_message: signals.{symbol}")
             
             # Track active signals
             if symbol not in self.active_signals:

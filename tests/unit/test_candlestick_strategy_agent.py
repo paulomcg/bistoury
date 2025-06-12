@@ -632,6 +632,7 @@ async def test_integration_scenario(strategy_config, sample_candle):
     mock_signal.expiry = datetime.now(timezone.utc) + timedelta(minutes=15)
     mock_signal.timeframe = Timeframe.FIVE_MINUTES
     mock_signal.timestamp = datetime.now(timezone.utc)
+    mock_signal.metadata = {}  # Add empty metadata dict
     
     agent._create_trading_signal = AsyncMock(return_value=mock_signal)
     
@@ -665,7 +666,7 @@ async def test_integration_scenario(strategy_config, sample_candle):
     
     # Check performance metrics were updated
     assert agent.performance_metrics.signals_generated == 1
-    assert agent.performance_metrics.patterns_detected == 1
+    assert agent.performance_metrics.patterns_detected == 2  # 1 single + 1 multi pattern
     assert agent.performance_metrics.high_confidence_signals == 1  # Since signal quality > 0.75
     
     # Stop the agent
