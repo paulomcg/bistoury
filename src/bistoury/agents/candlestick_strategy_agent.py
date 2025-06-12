@@ -186,21 +186,31 @@ class CandlestickStrategyAgent(BaseAgent):
         elif isinstance(config, CandlestickStrategyConfig):
             self.config = config
             agent_name = name
-        elif config is not None:
-            # Dict config provided - merge with defaults
-            self.config = CandlestickStrategyConfig.from_config_manager()
+        elif isinstance(config, dict):
+            # Dict config provided - merge with defaults from config manager
+            base_config = CandlestickStrategyConfig.from_config_manager()
+            # Override with dict values
+            for key, value in config.items():
+                if hasattr(base_config, key):
+                    setattr(base_config, key, value)
+            self.config = base_config
             agent_name = name
         else:
             # No config provided - use defaults from config manager
             self.config = CandlestickStrategyConfig.from_config_manager()
             agent_name = name
             
+        # Save our config before calling super(), as BaseAgent might overwrite it during state loading
+        saved_config = self.config
+        
         super().__init__(
             name=agent_name,
             agent_type=AgentType.STRATEGY,
-            config=config if isinstance(config, dict) else None,
             **kwargs
         )
+        
+        # Restore our config after super().__init__() in case it was overwritten
+        self.config = saved_config
         
         # Get centralized config manager
         self.config_manager = get_config_manager()

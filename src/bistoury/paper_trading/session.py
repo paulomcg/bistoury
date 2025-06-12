@@ -425,15 +425,16 @@ async def _create_paper_trading_agents(
     agents.append(collector_agent)
     
     # 2. CandlestickStrategyAgent
-    strategy_config = CandlestickStrategyConfig(
-        symbols=[symbol],
-        timeframes=[timeframe],
-        min_confidence_threshold=min_confidence,
-        agent_name="paper_strategy"
-    )
+    # Use the new config manager approach - pass a dict that will be used to override defaults
+    strategy_config = {
+        "symbols": [symbol],
+        "timeframes": [timeframe],
+        "min_confidence_threshold": min_confidence,
+        "agent_name": "paper_strategy"
+    }
     
     # Create strategy agent with custom persistence setting
-    strategy_agent = CandlestickStrategyAgent(config=strategy_config)
+    strategy_agent = CandlestickStrategyAgent(name="paper_strategy", config=strategy_config)
     # Disable state persistence after creation
     strategy_agent.persist_state = False
     strategy_agent._message_bus = message_bus
