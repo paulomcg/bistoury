@@ -1,8 +1,19 @@
 {
   "timeframe_analysis": {
     "primary_timeframe": "5m",
-    "supported_timeframes": ["1m", "5m", "15m", "1h", "4h", "1d"],
-    "default_timeframes": ["1m", "5m", "15m"],
+    "supported_timeframes": [
+      "1m",
+      "5m",
+      "15m",
+      "1h",
+      "4h",
+      "1d"
+    ],
+    "default_timeframes": [
+      "1m",
+      "5m",
+      "15m"
+    ],
     "sync_window_minutes": 60,
     "min_candles_required": 3,
     "data_quality_threshold": 0.0
@@ -48,5 +59,147 @@
     "include_technical_details": true,
     "include_risk_metrics": true,
     "include_confluence_details": true
+  },
+  "optimized_parameters": {
+    "sync_window_minutes": 172,
+    "min_candles_required": 6,
+    "data_quality_threshold": 0.3828226265943987,
+    "min_pattern_confidence": 14.047972686860554,
+    "min_confluence_score": 45.28320247742643,
+    "min_quality_score": 46.704287924729606,
+    "single_pattern_confidence_threshold": 10.865795208195085,
+    "multi_pattern_confidence_threshold": 13.874662362847257,
+    "volume_lookback_periods": 5,
+    "min_volume_ratio": 1.0170466454961833,
+    "volume_confirmation_threshold": 4.372291519392691,
+    "default_stop_loss_pct": 0.7228999610142706,
+    "default_take_profit_pct": 7.5842782330365095,
+    "min_risk_reward_ratio": 3.798951054246537,
+    "max_position_size_pct": 89.94959661195021,
+    "emergency_stop_loss_pct": 11.758818213052637,
+    "signal_expiry_minutes": 18,
+    "max_signals_per_symbol": 6,
+    "min_signal_strength": 0.6495987451061669,
+    "max_analysis_time_ms": 983,
+    "analysis_throttle_seconds": 33,
+    "max_data_buffer_size": 1155,
+    "data_cleanup_interval_seconds": 3572
+  },
+  "tunable_parameters": {
+    "sync_window_minutes": {
+      "min": 10,
+      "max": 240,
+      "type": "int"
+    },
+    "min_candles_required": {
+      "min": 1,
+      "max": 20,
+      "type": "int"
+    },
+    "data_quality_threshold": {
+      "min": 0.0,
+      "max": 1.0,
+      "type": "float"
+    },
+    "min_pattern_confidence": {
+      "min": 0.0,
+      "max": 100.0,
+      "type": "float"
+    },
+    "min_confluence_score": {
+      "min": 0.0,
+      "max": 100.0,
+      "type": "float"
+    },
+    "min_quality_score": {
+      "min": 0.0,
+      "max": 100.0,
+      "type": "float"
+    },
+    "single_pattern_confidence_threshold": {
+      "min": 0.0,
+      "max": 100.0,
+      "type": "float"
+    },
+    "multi_pattern_confidence_threshold": {
+      "min": 0.0,
+      "max": 100.0,
+      "type": "float"
+    },
+    "volume_lookback_periods": {
+      "min": 5,
+      "max": 100,
+      "type": "int"
+    },
+    "min_volume_ratio": {
+      "min": 0.5,
+      "max": 5.0,
+      "type": "float"
+    },
+    "volume_confirmation_threshold": {
+      "min": 0.5,
+      "max": 5.0,
+      "type": "float"
+    },
+    "default_stop_loss_pct": {
+      "min": 0.5,
+      "max": 10.0,
+      "type": "float"
+    },
+    "default_take_profit_pct": {
+      "min": 1.0,
+      "max": 20.0,
+      "type": "float"
+    },
+    "min_risk_reward_ratio": {
+      "min": 0.5,
+      "max": 5.0,
+      "type": "float"
+    },
+    "max_position_size_pct": {
+      "min": 1.0,
+      "max": 100.0,
+      "type": "float"
+    },
+    "emergency_stop_loss_pct": {
+      "min": 1.0,
+      "max": 20.0,
+      "type": "float"
+    },
+    "signal_expiry_minutes": {
+      "min": 1,
+      "max": 60,
+      "type": "int"
+    },
+    "max_signals_per_symbol": {
+      "min": 1,
+      "max": 10,
+      "type": "int"
+    },
+    "min_signal_strength": {
+      "min": 0.0,
+      "max": 1.0,
+      "type": "float"
+    },
+    "max_analysis_time_ms": {
+      "min": 100,
+      "max": 10000,
+      "type": "int"
+    },
+    "analysis_throttle_seconds": {
+      "min": 1,
+      "max": 60,
+      "type": "int"
+    },
+    "max_data_buffer_size": {
+      "min": 100,
+      "max": 10000,
+      "type": "int"
+    },
+    "data_cleanup_interval_seconds": {
+      "min": 60,
+      "max": 3600,
+      "type": "int"
+    }
   }
-} 
+}

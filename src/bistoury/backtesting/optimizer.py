@@ -10,6 +10,11 @@ import logging
 import sys
 import io
 import signal
+import multiprocessing as mp
+import threading
+import time
+import tempfile
+import subprocess
 
 # List of known loggers to suppress
 KNOWN_LOGGERS = [
@@ -29,16 +34,73 @@ KNOWN_LOGGERS = [
     'optuna',
 ]
 
-# Global flag for graceful shutdown
-_shutdown_requested = False
+# Global shutdown event for multiprocessing coordination
+_shutdown_event = None
+_worker_processes = []
 
-def _signal_handler(signum, frame):
-    """Handle SIGINT/SIGTERM gracefully."""
-    global _shutdown_requested
-    _shutdown_requested = True
+def _simple_signal_handler(signum, frame):
+    """Simple signal handler for single-process optimization."""
     print("\n[INFO] Optimization interrupted by user (Ctrl+C). Stopping gracefully...")
-    # Force exit if signal handling doesn't work
     sys.exit(130)
+
+def _multiprocessing_signal_handler(signum, frame):
+    """Signal handler for multiprocessing optimization - terminates all worker processes."""
+    global _worker_processes, _shutdown_event
+    print("\n[INFO] Optimization interrupted by user (Ctrl+C). Stopping all workers...")
+    
+    # Set shutdown event
+    if _shutdown_event:
+        _shutdown_event.set()
+    
+    # Terminate all worker processes
+    for process in _worker_processes:
+        if process.is_alive():
+            process.terminate()
+    
+    # Wait for processes to terminate
+    for process in _worker_processes:
+        process.join(timeout=2)
+        if process.is_alive():
+            process.kill()
+    
+    sys.exit(130)
+
+def _worker_process(worker_id: int, study_name: str, storage_url: str, n_trials_per_worker: int, 
+                   base_config: dict, search_space: dict, output_dir: str, debug: bool, shutdown_event):
+    """Worker process function for multiprocessing optimization."""
+    try:
+        # Set up signal handling in worker
+        def worker_signal_handler(signum, frame):
+            if shutdown_event:
+                shutdown_event.set()
+        
+        signal.signal(signal.SIGINT, worker_signal_handler)
+        signal.signal(signal.SIGTERM, worker_signal_handler)
+        
+        # Suppress logging in worker processes unless debug mode
+        if not debug:
+            _suppress_logging_and_output(debug)
+        
+        # Create study connection
+        storage = optuna.storages.RDBStorage(url=storage_url)
+        study = optuna.load_study(study_name=study_name, storage=storage)
+        
+        # Create objective function for this worker
+        objective = objective_factory(base_config, search_space, output_dir, debug, shutdown_event)
+        
+        if debug:
+            print(f"[DEBUG] Worker {worker_id} starting with {n_trials_per_worker} trials")
+        
+        # Run optimization in this worker
+        study.optimize(objective, n_trials=n_trials_per_worker, show_progress_bar=False)
+        
+        if debug:
+            print(f"[DEBUG] Worker {worker_id} completed")
+            
+    except Exception as e:
+        if debug:
+            print(f"[ERROR] Worker {worker_id} failed: {e}")
+        raise
 
 def _suppress_logging_and_output(debug: bool):
     """Suppress logging and output for cleaner optimization runs."""
@@ -120,19 +182,18 @@ def objective_factory(
     base_config: dict,
     search_space: dict,
     output_dir: str,
-    debug: bool
+    debug: bool,
+    shutdown_event=None
 ):
     """
     Returns an Optuna objective function that runs BacktestEngine with trial parameters.
     """
     def objective(trial: optuna.Trial) -> float:
-        global _shutdown_requested
-        
         logger = logging.getLogger("optimizer.trial")
         logger.info(f"Starting trial {trial.number}...")
         
-        # Check if shutdown was requested
-        if _shutdown_requested:
+        # Check if shutdown was requested (works for both single and multiprocessing)
+        if shutdown_event and shutdown_event.is_set():
             logger.info(f"Trial {trial.number} ended: shutdown requested")
             raise optuna.TrialPruned()
         
@@ -146,8 +207,14 @@ def objective_factory(
         
         result_file = None
         try:
-            # Use asyncio.run() but let KeyboardInterrupt propagate naturally
-            result = asyncio.run(BacktestEngine(config, output_path=output_dir).run_backtest())
+            # Check shutdown event periodically during backtest
+            result = asyncio.run(BacktestEngine(config, output_path=output_dir, shutdown_event=shutdown_event).run_backtest())
+            
+            # Check again after backtest completes
+            if shutdown_event and shutdown_event.is_set():
+                logger.info(f"Trial {trial.number} ended: shutdown requested after completion")
+                raise optuna.TrialPruned()
+            
             sharpe = result.performance.sharpe_ratio
             
             # Try to infer the result file path (if written)
@@ -195,30 +262,88 @@ def run_optimization(
     - Runs optimization (objective function runs BacktestEngine)
     - Saves best parameters to strategy.json
     """
-    global _shutdown_requested
+    global _worker_processes, _shutdown_event
     
-    # Set up signal handlers for immediate termination
-    signal.signal(signal.SIGINT, _signal_handler)
-    signal.signal(signal.SIGTERM, _signal_handler)
-    
-    _suppress_logging_and_output(debug)
-    
-    # Load base config
-    with open(strategy_config_path, 'r') as f:
-        base_config = json.load(f)
-    
-    search_space = get_search_space_from_strategy_config(strategy_config_path)
-    study = create_optuna_study(study_name, output_dir)
-    objective = objective_factory(base_config, search_space, output_dir, debug)
-    
-    if debug:
-        print(f"[DEBUG] Search space: {search_space}")
-        print(f"[DEBUG] Optuna study created at {output_dir}")
+    # Set up appropriate signal handling based on n_jobs
+    if n_jobs > 1:
+        if debug:
+            print(f"[INFO] Setting up multiprocessing optimization with {n_jobs} workers")
+        signal.signal(signal.SIGINT, _multiprocessing_signal_handler)
+        signal.signal(signal.SIGTERM, _multiprocessing_signal_handler)
+        _shutdown_event = mp.Event()
+    else:
+        if debug:
+            print("[INFO] Setting up single-process optimization")
+        signal.signal(signal.SIGINT, _simple_signal_handler)
+        signal.signal(signal.SIGTERM, _simple_signal_handler)
     
     try:
-        # Use Optuna's built-in optimization with simple KeyboardInterrupt handling
-        # Force n_jobs=1 to avoid multiprocessing signal handling issues
-        study.optimize(objective, n_trials=n_trials, n_jobs=1, show_progress_bar=debug)
+        _suppress_logging_and_output(debug)
+        
+        # Load base config
+        with open(strategy_config_path, 'r') as f:
+            base_config = json.load(f)
+        
+        search_space = get_search_space_from_strategy_config(strategy_config_path)
+        
+        if debug:
+            print(f"[DEBUG] Search space: {search_space}")
+        
+        # Create storage for multiprocessing (SQLite for simplicity)
+        if n_jobs > 1:
+            # Use SQLite database for multiprocessing coordination
+            storage_file = os.path.join(output_dir, f"{study_name}_optuna.db")
+            storage_url = f"sqlite:///{storage_file}"
+            storage = optuna.storages.RDBStorage(url=storage_url)
+            
+            # Create study
+            try:
+                study = optuna.create_study(
+                    study_name=study_name, 
+                    storage=storage, 
+                    direction="maximize", 
+                    load_if_exists=True
+                )
+            except optuna.exceptions.DuplicatedStudyError:
+                study = optuna.load_study(study_name=study_name, storage=storage)
+            
+            if debug:
+                print(f"[DEBUG] Created multiprocessing study with storage: {storage_url}")
+            
+            # Calculate trials per worker
+            trials_per_worker = n_trials // n_jobs
+            remaining_trials = n_trials % n_jobs
+            
+            # Start worker processes
+            _worker_processes = []
+            for worker_id in range(n_jobs):
+                worker_trials = trials_per_worker + (1 if worker_id < remaining_trials else 0)
+                if worker_trials > 0:
+                    process = mp.Process(
+                        target=_worker_process,
+                        args=(worker_id, study_name, storage_url, worker_trials, 
+                              base_config, search_space, output_dir, debug, _shutdown_event)
+                    )
+                    process.start()
+                    _worker_processes.append(process)
+            
+            # Wait for all workers to complete
+            for process in _worker_processes:
+                process.join()
+            
+            # Check if any worker failed
+            failed_workers = [p for p in _worker_processes if p.exitcode != 0]
+            if failed_workers and debug:
+                print(f"[WARNING] {len(failed_workers)} workers failed")
+            
+            # Reload study to get final results
+            study = optuna.load_study(study_name=study_name, storage=storage)
+            
+        else:
+            # Single process optimization
+            study = create_optuna_study(study_name, output_dir)
+            objective = objective_factory(base_config, search_space, output_dir, debug, None)
+            study.optimize(objective, n_trials=n_trials, show_progress_bar=debug)
         
         if debug:
             print(f"[INFO] Optimization complete. Best value: {study.best_value}")
@@ -239,17 +364,34 @@ def run_optimization(
         # Handle KeyboardInterrupt gracefully
         print("\n[INFO] Optimization interrupted by user (Ctrl+C). Exiting gracefully...")
         
+        # Clean up worker processes if they exist
+        if n_jobs > 1:
+            for process in _worker_processes:
+                if process.is_alive():
+                    process.terminate()
+            for process in _worker_processes:
+                process.join(timeout=2)
+                if process.is_alive():
+                    process.kill()
+        
         # Still try to save best parameters if we have any completed trials
-        if study.trials:
-            try:
+        try:
+            if n_jobs > 1:
+                # Reload study for multiprocessing case
+                storage_file = os.path.join(output_dir, f"{study_name}_optuna.db")
+                storage_url = f"sqlite:///{storage_file}"
+                storage = optuna.storages.RDBStorage(url=storage_url)
+                study = optuna.load_study(study_name=study_name, storage=storage)
+            
+            if study.trials:
                 with open(strategy_config_path, 'r') as f:
                     config = json.load(f)
                 config['optimized_parameters'] = study.best_params
                 with open(strategy_config_path, 'w') as f:
                     json.dump(config, f, indent=2)
                 print(f"[INFO] Best parameters from completed trials saved to {strategy_config_path}")
-            except Exception as e:
-                print(f"[WARNING] Could not save partial results: {e}")
+        except Exception as e:
+            print(f"[WARNING] Could not save partial results: {e}")
         
         # Re-raise to ensure proper exit code
         raise 

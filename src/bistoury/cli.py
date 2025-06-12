@@ -7,12 +7,19 @@ from pathlib import Path
 from typing import Optional
 
 import click
+import asyncio
+from rich.console import Console
+from rich.table import Table
+from rich.panel import Panel
+from src.bistoury.backtesting.backtest_engine import BacktestEngine
 
 from . import __version__
 from .config import Config
 from .logger import get_logger
 from .database.connection import initialize_database, get_database_manager, shutdown_database
 from .cli_commands.collector import collect  # Import the new collector CLI module
+from src.bistoury.cli_commands.backtest import backtest
+from src.bistoury.cli_commands.optimize import optimize
 
 
 @click.group()
@@ -68,6 +75,11 @@ def main(ctx: click.Context, config: Optional[Path], verbose: bool) -> None:
 
 # Add the collector command group
 main.add_command(collect)
+
+# Add the backtest command group
+main.add_command(backtest)
+main.add_command(optimize)
+print('[DEBUG] backtest command registered to main CLI group')
 
 
 @main.command()

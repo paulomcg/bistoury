@@ -972,9 +972,14 @@ class BacktestResult(BaseModel):
         default_factory=lambda: datetime.now(timezone.utc),
         description="When backtest was run"
     )
+    result_file_path: Optional[str] = Field(
+        default=None,
+        description="Path to the saved result file"
+    )
     
     model_config = ConfigDict(
         validate_assignment=True,
+        extra="allow",
         json_encoders={
             datetime: lambda v: v.isoformat(),
             Decimal: str,

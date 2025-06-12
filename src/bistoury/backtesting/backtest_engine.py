@@ -27,15 +27,17 @@ class BacktestEngine:
     CollectorAgent (historical replay), StrategyAgent(s), and PositionManagerAgent.
     Produces BacktestResult objects and handles result persistence.
     """
-    def __init__(self, config: Dict[str, Any], output_path: Optional[str] = None):
+    def __init__(self, config: Dict[str, Any], output_path: Optional[str] = None, shutdown_event=None):
         """
         Initialize the BacktestEngine.
         Args:
             config: Dictionary of configuration parameters (strategy, dates, capital, etc.)
             output_path: Optional path to save results (JSON/DuckDB)
+            shutdown_event: Optional multiprocessing.Event for coordinated shutdown
         """
         self.config = config
         self.output_path = output_path
+        self.shutdown_event = shutdown_event
         # Initialize ConfigManager for loading defaults and paths
         self.config_manager = get_config_manager()
         # Load default values from config/index.json and other configs
@@ -146,6 +148,11 @@ class BacktestEngine:
         replay_monitor_task = asyncio.create_task(monitor_replay_completion())
         try:
             while not replay_complete.is_set():
+                # Check for shutdown event first (multiprocessing coordination)
+                if self.shutdown_event and self.shutdown_event.is_set():
+                    console.print("[yellow]Backtest interrupted by shutdown event[/yellow]")
+                    break
+                    
                 current_time = asyncio.get_event_loop().time()
                 elapsed = current_time - start_time
                 if elapsed >= actual_duration:

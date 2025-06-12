@@ -1959,28 +1959,124 @@
     },
     {
       "id": "18",
-      "title": "Backtesting Engine",
-      "description": "Build comprehensive backtesting system for strategy optimization",
+      "title": "Backtesting & Optimisation Engine",
+      "description": "Finalize the backtesting engine and build a parameter-optimisation loop leveraging the existing Collector/PositionManager components and the central ConfigManager infrastructure.",
       "status": "pending",
-      "priority": "medium",
+      "priority": "high",
       "details": {
         "implementation": [
-          "Create backtesting engine with historical data replay",
-          "Implement realistic market simulation with slippage",
-          "Add comprehensive performance metrics calculation",
-          "Create parameter optimization framework",
-          "Implement walk-forward analysis capabilities",
-          "Add result visualization and reporting"
+          "Integrate BacktestEngine wrapper that orchestrates CollectorAgent (historical replay), StrategyAgent(s) and PositionManagerAgent via AgentOrchestrator",
+          "Produce BacktestResult objects and persist them as JSON (and/or DuckDB table) under config-defined paths using ConfigManager",
+          "Expose CLI command `bistoury backtest` to run a single back-test and pretty-print key metrics",
+          "Implement parameter optimisation module using Optuna (or Hyperopt) callable via BacktestEngine",
+          "Expose CLI command `bistoury optimize` that runs Bayesian/SMBO search over parameter space defined in config/strategy.json",
+          "Add walk-forward / sliding-window validation helper that aggregates metrics across periods",
+          "Integrate result indexing in config/index.json for easy lookup and comparison",
+          "Write unit tests that back-test CandlestickStrategy on one-day sample and assert deterministic P&L & metrics",
+          "Add documentation & example notebook demonstrating optimisation workflow"
         ],
         "acceptanceCriteria": [
-          "Accurately replays historical market conditions",
-          "Provides comprehensive performance analytics",
-          "Supports parameter optimization across multiple metrics",
-          "Generates detailed backtesting reports"
+          "BacktestEngine reproduces PositionManager P&L within ±0.1% versus interactive paper-trade run",
+          "`bistoury backtest` creates BacktestResult JSON and saves path recorded in index.json",
+          "`bistoury optimize` finishes N trials and outputs best Sharpe/Sortino parameters",
+          "Walk-forward helper produces aggregated metrics for at least 3 rolling periods",
+          "All newly added unit tests pass in CI"
         ]
       },
       "dependencies": [],
-      "subtasks": []
+      "subtasks": [
+        {
+          "id": "18.1",
+          "title": "BacktestEngine Core Wrapper",
+          "description": "Build the async wrapper that launches agents in historical mode and returns BacktestResult",
+          "status": "pending",
+          "dependencies": [],
+          "subtasks": [
+            {"id": "18.1.1", "title": "Define BacktestEngine architecture", "description": "Create engine class skeleton, decide on public API (run_backtest)", "status": "pending"},
+            {"id": "18.1.2", "title": "Integrate ConfigManager paths", "description": "Read default start/end dates, capital, and storage paths from config/index.json via ConfigManager", "status": "pending"},
+            {"id": "18.1.3", "title": "Wire Collector/Strategy/PositionManager launch", "description": "Instantiate agents in historical mode with parameters supplied", "status": "pending"},
+            {"id": "18.1.4", "title": "Generate BacktestResult object", "description": "Collect metrics from PositionManagerAgent, populate BacktestResult including StrategyPerformance", "status": "pending"},
+            {"id": "18.1.5", "title": "Persist result to JSON and/or DuckDB", "description": "Save result file to folder specified in config, return path", "status": "pending"}
+          ]
+        },
+        {
+          "id": "18.2",
+          "title": "CLI Command: bistoury backtest",
+          "description": "Create Click command that invokes BacktestEngine with args pulled from ConfigManager/flags",
+          "status": "pending",
+          "dependencies": ["18.1"],
+          "subtasks": [
+            {"id": "18.2.1", "title": "Define CLI flags", "description": "strategy, from-date, to-date, capital, config overrides", "status": "pending"},
+            {"id": "18.2.2", "title": "Invoke BacktestEngine", "description": "Pass parsed args, handle async execution", "status": "pending"},
+            {"id": "18.2.3", "title": "Pretty-print summary", "description": "Use Rich to display P&L, Sharpe, draw-down etc.", "status": "pending"},
+            {"id": "18.2.4", "title": "Return exit codes", "description": "0 on success, non-zero on failure for CI scripts", "status": "pending"}
+          ]
+        },
+        {
+          "id": "18.3",
+          "title": "Parameter Optimisation Module (Optuna)",
+          "description": "Implement optimisation loop that iterates BacktestEngine and logs trial metrics",
+          "status": "done",
+          "dependencies": ["18.1"],
+          "subtasks": [
+            {"id": "18.3.1", "title": "Choose optimisation library", "description": "Add Optuna to pyproject and set up study storage (SQLite)", "status": "done"},
+            {"id": "18.3.2", "title": "Define search space from config", "description": "Parse strategy.json for tunable params with min/max", "status": "done"},
+            {"id": "18.3.3", "title": "Implement objective function", "description": "Run BacktestEngine, return negative Sharpe as loss", "status": "done"},
+            {"id": "18.3.4", "title": "Parallel execution support", "description": "Allow n_jobs flag for Optuna with ProcessPoolExecutor", "status": "done"},
+            {"id": "18.3.5", "title": "Save best parameters", "description": "Dump best_trial params back to config/strategy.json via ConfigManager", "status": "done"}
+          ]
+        },
+        {
+          "id": "18.4",
+          "title": "CLI Command: bistoury optimize",
+          "description": "Expose optimisation loop via CLI with configurable search space",
+          "status": "done",
+          "dependencies": ["18.2", "18.3"],
+          "subtasks": [
+            {"id": "18.4.1", "title": "Define CLI flags", "description": "trials, study-name, sampler, pruner, concurrency", "status": "done"},
+            {"id": "18.4.2", "title": "Run optimisation study", "description": "Invoke optimisation module, stream progress with Rich", "status": "done"},
+            {"id": "18.4.3", "title": "Persist study and best params", "description": "Save study DB and update index.json", "status": "done"}
+          ]
+        },
+        {
+          "id": "18.5",
+          "title": "Result Persistence & Indexing",
+          "description": "Persist BacktestResult JSON and update config/index.json via ConfigManager",
+          "status": "pending",
+          "dependencies": ["18.1"],
+          "subtasks": [
+            {"id": "18.5.1", "title": "Design result schema", "description": "Define JSON structure & DuckDB table for backtest metadata", "status": "pending"},
+            {"id": "18.5.2", "title": "Implement save_result util", "description": "Write helper to save JSON and return UID", "status": "pending"},
+            {"id": "18.5.3", "title": "Update index.json", "description": "Append record with UID, path, metrics summary", "status": "pending"},
+            {"id": "18.5.4", "title": "Implement load_result util", "description": "Load by UID and return BacktestResult instance", "status": "pending"}
+          ]
+        },
+        {
+          "id": "18.6",
+          "title": "Unit Tests & CI Integration",
+          "description": "Add tests covering BacktestEngine deterministic run and optimisation output",
+          "status": "pending",
+          "dependencies": ["18.1", "18.3"],
+          "subtasks": [
+            {"id": "18.6.1", "title": "Create minimal DuckDB fixture", "description": "Load one-day BTC candles for fast tests", "status": "pending"},
+            {"id": "18.6.2", "title": "Test BacktestEngine run", "description": "Assert BacktestResult.total_return_pct != None", "status": "pending"},
+            {"id": "18.6.3", "title": "Test optimisation loop", "description": "Run 5 trial optimisation and assert best trial captured", "status": "pending"},
+            {"id": "18.6.4", "title": "Integrate into pytest workflow", "description": "Add to tests/unit and ensure <60 s runtime", "status": "pending"}
+          ]
+        },
+        {
+          "id": "18.7",
+          "title": "Documentation & Examples",
+          "description": "Write docs/README sections and sample notebook for back-testing and optimisation",
+          "status": "pending",
+          "dependencies": ["18.2", "18.4"],
+          "subtasks": [
+            {"id": "18.7.1", "title": "Update README trading section", "description": "Add usage examples for backtest & optimize commands", "status": "pending"},
+            {"id": "18.7.2", "title": "Create Jupyter notebook", "description": "Show loading BacktestResult and plotting equity curve", "status": "pending"},
+            {"id": "18.7.3", "title": "Generate API docs via pdoc", "description": "Document BacktestEngine public API", "status": "pending"}
+          ]
+        }
+      ]
     },
     {
       "id": "19",
