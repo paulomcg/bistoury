@@ -553,24 +553,29 @@ class CandleUpdateMessage(BaseModel):
         Create CandleUpdateMessage from HyperLiquid WebSocket data.
         
         Expected format: {
-            't': 1705316200000,
-            's': 'BTC',
-            'o': '50000.0',
-            'h': '50100.0',
-            'l': '49900.0',
-            'c': '50050.0',
-            'v': '123.45',
-            'n': 1500,
-            'closed': true
+            't': 1705316200000,  # open time millis
+            'T': 1705316260000,  # close time millis  
+            's': 'BTC',          # symbol
+            'i': '1m',           # interval
+            'o': 50000.0,        # open price
+            'h': 50100.0,        # high price
+            'l': 49900.0,        # low price
+            'c': 50050.0,        # close price
+            'v': 123.45,         # volume
+            'n': 1500            # number of trades
         }
+        
+        Note: HyperLiquid does NOT send a 'closed' field.
         """
         candle = CandlestickData.from_hyperliquid(data, timeframe)
         
+        # Since HyperLiquid doesn't provide a 'closed' field, we assume candles are updates
+        # The collector will handle filtering based on timing logic
         return cls(
             candle=candle,
             symbol=symbol,
             timeframe=timeframe,
-            is_closed=data.get('closed', False),
+            is_closed=False,  # Always False since HyperLiquid doesn't indicate closure
             timestamp=datetime.now(timezone.utc)
         )
     

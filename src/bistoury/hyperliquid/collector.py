@@ -137,6 +137,11 @@ class EnhancedDataCollector:
         self.orderbook_buffer: List[DBOrderBookSnapshot] = []
         self.funding_rate_buffer: List[DBFundingRateData] = []
         
+        # Candle tracking: stores the latest candle for each (symbol, interval, timestamp) combination
+        # Key format: f"{symbol}:{interval}:{timestamp_start_ms}"
+        # This allows us to only store/broadcast when we get a new timestamp
+        self.latest_candles: Dict[str, Tuple[DBCandlestickData, str]] = {}
+        
         # Statistics and monitoring
         self.stats = CollectorStats()
         self.batch_operations: Dict[str, DBBatchOperation] = {}
@@ -605,7 +610,12 @@ class EnhancedDataCollector:
             self.stats.errors += 1
     
     async def _handle_enhanced_candle_update(self, message: Dict[str, Any]) -> None:
-        """Handle enhanced candle/kline updates from WebSocket."""
+        """
+        Handle enhanced candle/kline updates from WebSocket.
+        
+        Uses a buffering approach: track the latest candle for each timestamp
+        and only store/broadcast when we receive a candle with a new timestamp.
+        """
         try:
             logger.debug(f"🕯️ Received candle message: {json.dumps(message, indent=2)}")
             
@@ -619,6 +629,7 @@ class EnhancedDataCollector:
                     logger.debug(f"📊 Processing candle data: {data}")
                     
                     # Extract raw HyperLiquid candle fields based on API documentation
+                    # NOTE: HyperLiquid does NOT send a 'closed' field according to their docs
                     symbol = data.get('s', '')  # coin symbol
                     interval = data.get('i', '')  # interval
                     
@@ -626,7 +637,7 @@ class EnhancedDataCollector:
                     
                     # Only process candles for symbols and intervals we're interested in
                     if symbol not in self.config.symbols or interval not in self.config.intervals:
-                        logger.info(f"⏭️ Skipping {symbol} {interval} - not in config")
+                        logger.debug(f"⏭️ Skipping {symbol} {interval} - not in config")
                         return
                     
                     # Extract candle fields according to HyperLiquid format:
@@ -640,16 +651,15 @@ class EnhancedDataCollector:
                     volume = str(data.get('v', '0'))      # volume (base unit)
                     trade_count = data.get('n', 0)        # number of trades
                     
-                    logger.debug(f"💰 Prices - O:{open_price} H:{high_price} L:{low_price} C:{close_price} V:{volume}")
-                    
                     # Convert timestamp from milliseconds to datetime
                     candle_timestamp = datetime.fromtimestamp(open_time / 1000, tz=timezone.utc)
+                    candle_end_time = datetime.fromtimestamp(close_time / 1000, tz=timezone.utc)
                     
-                    # Create enhanced candle model with correct field mapping
+                    # Create enhanced candle model
                     db_candle = DBCandlestickData(
                         symbol=symbol,
                         timestamp_start=candle_timestamp,
-                        timestamp_end=datetime.fromtimestamp(close_time / 1000, tz=timezone.utc),
+                        timestamp_end=candle_end_time,
                         open_price=open_price,
                         high_price=high_price,
                         low_price=low_price,
@@ -658,7 +668,7 @@ class EnhancedDataCollector:
                         trade_count=trade_count
                     )
                     
-                    logger.debug(f"✅ Created candle model for {symbol} {interval}")
+                    logger.debug(f"💰 Updated candle - O:{open_price} H:{high_price} L:{low_price} C:{close_price} V:{volume}")
                     
                     # Validate if enabled
                     if self.config.enable_validation:
@@ -666,12 +676,39 @@ class EnhancedDataCollector:
                             logger.warning(f"❌ Validation failed for {symbol} {interval}")
                             return
                     
-                    # Store the interval with the candle for later table routing
-                    # We'll use a tuple: (candle, interval)
-                    self.candle_buffer.append((db_candle, interval))
-                    self.stats.candles_collected += 1
+                    # Create a unique key for this candle based on symbol, interval, and timestamp
+                    candle_key = f"{symbol}:{interval}:{open_time}"
                     
-                    logger.debug(f"📈 Added candle to buffer. Total in buffer: {len(self.candle_buffer)}")
+                    # Check if we already have a candle for this timestamp
+                    if candle_key in self.latest_candles:
+                        # Update the existing candle with the latest data
+                        logger.debug(f"🔄 Updating existing candle for {symbol} {interval} at {candle_timestamp}")
+                        self.latest_candles[candle_key] = (db_candle, interval)
+                    else:
+                        # This is a new timestamp - store the previous candle (if any) and start tracking the new one
+                        previous_candles_to_store = []
+                        
+                        # Check if we have any previous candles for this symbol:interval that should be stored
+                        prefix = f"{symbol}:{interval}:"
+                        for key, (prev_candle, prev_interval) in list(self.latest_candles.items()):
+                            if key.startswith(prefix) and key != candle_key:
+                                # This is a previous candle for the same symbol:interval
+                                logger.info(f"📤 Previous candle ready for storage: {symbol} {interval} at {prev_candle.timestamp_start}")
+                                previous_candles_to_store.append((prev_candle, prev_interval))
+                                # Remove from tracking since we're storing it
+                                del self.latest_candles[key]
+                        
+                        # Store all previous candles that are now final
+                        for prev_candle, prev_interval in previous_candles_to_store:
+                            self.candle_buffer.append((prev_candle, prev_interval))
+                            self.stats.candles_collected += 1
+                            logger.debug(f"✅ Added final candle to buffer: {prev_candle.symbol} {prev_interval}")
+                        
+                        # Start tracking the new candle
+                        logger.debug(f"🆕 Starting to track new candle for {symbol} {interval} at {candle_timestamp}")
+                        self.latest_candles[candle_key] = (db_candle, interval)
+                    
+                    logger.debug(f"📈 Tracking {len(self.latest_candles)} active candles, {len(self.candle_buffer)} ready for storage")
                     
                 except Exception as e:
                     logger.warning(f"Failed to process candle data: {e}")
@@ -750,6 +787,16 @@ class EnhancedDataCollector:
                 if high_price < max(open_price, close_price, low_price):
                     return False
                 if low_price > min(open_price, close_price, high_price):
+                    return False
+                
+                # ANTI-UNFINISHED CHECK: Reject candles that appear to be unfinished
+                # Unfinished candles typically have O=C=H=L with zero volume/trades
+                # Real Doji candles have O=C but usually some volume/trades and H/L movement
+                is_perfect_doji = (open_price == close_price == high_price == low_price)
+                has_no_activity = (volume == 0 and candle.trade_count == 0)
+                
+                if is_perfect_doji and has_no_activity:
+                    logger.debug(f"🚫 Rejecting unfinished candle: {candle.symbol} (O=C=H=L={open_price}, vol=0, trades=0)")
                     return False
                 
             except (ValueError, TypeError, InvalidOperation):
@@ -906,15 +953,23 @@ class EnhancedDataCollector:
             for interval, candles in candles_by_timeframe.items():
                 table_name = f"candles_{interval}"
                 
-                    # Use the new schema (matches DBCandlestickData and MarketDataSchema)
-                # Get the next ID for insertion to avoid sequence issues
-                result = self.db_manager.execute(f"SELECT COALESCE(max(id), 0) + 1 as next_id FROM {table_name}")
-                start_id = result[0][0] if result and result[0] else 1
-                
+                # Use INSERT ... ON CONFLICT DO UPDATE SET to properly handle timestamp conflicts
+                # This ensures final candle data overwrites any incomplete data
+                # Use nextval() to generate proper sequential IDs
                 query = f"""
-                    INSERT OR IGNORE INTO {table_name} 
+                    INSERT INTO {table_name} 
                     (id, symbol, interval, open_time_ms, close_time_ms, timestamp_start, timestamp_end, open_price, high_price, low_price, close_price, volume, trade_count)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    VALUES (nextval('{table_name}_seq'), ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    ON CONFLICT (symbol, timestamp_start) DO UPDATE SET
+                        timestamp_end = EXCLUDED.timestamp_end,
+                        open_price = EXCLUDED.open_price,
+                        high_price = EXCLUDED.high_price,
+                        low_price = EXCLUDED.low_price,
+                        close_price = EXCLUDED.close_price,
+                        volume = EXCLUDED.volume,
+                        trade_count = EXCLUDED.trade_count,
+                        open_time_ms = EXCLUDED.open_time_ms,
+                        close_time_ms = EXCLUDED.close_time_ms
                 """
                 
                 # Prepare bulk insert data
@@ -931,7 +986,6 @@ class EnhancedDataCollector:
                         close_time_ms = int(candle_model.timestamp_end.timestamp() * 1000)
                         
                         insert_data.append((
-                            start_id + i,  # Explicit ID assignment
                             candle_model.symbol,
                             candle_interval,  # Add the interval field!
                             open_time_ms,  # Add the open_time_ms field!
@@ -950,14 +1004,14 @@ class EnhancedDataCollector:
                         continue
                 
                 if insert_data:
-                    # Execute the insert
+                    # Execute the insert with conflict resolution
                     self.db_manager.execute_many(query, insert_data)
                     stored_count = len(insert_data)
                     
                     self.stats.candles_collected += stored_count
-                    logger.info(f"✅ Flushed {stored_count} candles to {table_name}")
+                    logger.info(f"✅ Flushed {stored_count} final candles to {table_name}")
             
-            logger.debug(f"Enhanced flush: {len(self.candle_buffer)} candle records to database")
+            logger.debug(f"Enhanced flush: {len(self.candle_buffer)} final candle records to database")
             self.candle_buffer.clear()
             
         except Exception as e:
@@ -980,8 +1034,8 @@ class EnhancedDataCollector:
             )
             
             insert_query = """
-                INSERT INTO funding_rates (symbol, timestamp, time_ms, funding_rate, funding_rate_decimal, premium, premium_decimal)
-                VALUES (?, ?, ?, ?, ?, ?, ?)
+                INSERT INTO funding_rates (id, symbol, timestamp, time_ms, funding_rate, funding_rate_decimal, premium, premium_decimal)
+                VALUES (nextval('funding_rates_seq'), ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT (symbol, time_ms) DO UPDATE SET
                 timestamp = EXCLUDED.timestamp,
                 funding_rate = EXCLUDED.funding_rate,
@@ -1020,13 +1074,63 @@ class EnhancedDataCollector:
     
     async def _flush_all_buffers(self) -> None:
         """Flush all data buffers to database."""
-        await asyncio.gather(
-            self._flush_trade_buffer(),
-            self._flush_orderbook_buffer(),
-            self._flush_candle_buffer(),
-            self._flush_funding_rate_buffer(),
-            return_exceptions=True
-        )
+        try:
+            # First, flush any remaining tracked candles to the buffer
+            await self._flush_tracked_candles()
+            
+            # Then flush all buffers
+            await asyncio.gather(
+                self._flush_trade_buffer(),
+                self._flush_orderbook_buffer(),
+                self._flush_candle_buffer(),
+                self._flush_funding_rate_buffer(),
+                return_exceptions=True
+            )
+            logger.debug("All buffers flushed successfully")
+        except Exception as e:
+            logger.error(f"Error flushing buffers: {e}")
+    
+    async def _flush_tracked_candles(self) -> None:
+        """
+        Flush any remaining tracked candles to the candle buffer.
+        This should be called during shutdown to ensure no candles are lost.
+        Only flushes candles that appear complete (not unfinished patterns).
+        """
+        try:
+            if self.latest_candles:
+                logger.info(f"🔄 Flushing {len(self.latest_candles)} remaining tracked candles")
+                
+                flushed_count = 0
+                skipped_count = 0
+                
+                for candle_key, (candle, interval) in self.latest_candles.items():
+                    # Check if this appears to be an unfinished candle
+                    # Unfinished candles typically have O=C=H=L with zero volume/trades
+                    # Real Doji candles have O=C but usually some volume/trades and H/L movement
+                    open_price = float(candle.open_price)
+                    close_price = float(candle.close_price)
+                    high_price = float(candle.high_price)
+                    low_price = float(candle.low_price)
+                    volume = float(candle.volume)
+                    
+                    is_perfect_doji = (open_price == close_price == high_price == low_price)
+                    has_no_activity = (volume == 0 and candle.trade_count == 0)
+                    
+                    if is_perfect_doji and has_no_activity:
+                        logger.warning(f"🚫 Skipping unfinished candle during shutdown: {candle.symbol} {interval} at {candle.timestamp_start} (O=C=H=L={open_price}, vol=0, trades=0)")
+                        skipped_count += 1
+                        continue
+                    
+                    self.candle_buffer.append((candle, interval))
+                    self.stats.candles_collected += 1
+                    flushed_count += 1
+                    logger.debug(f"✅ Flushed tracked candle: {candle.symbol} {interval} at {candle.timestamp_start}")
+                
+                # Clear the tracking dictionary
+                self.latest_candles.clear()
+                logger.info(f"Shutdown flush complete: {flushed_count} candles stored, {skipped_count} unfinished candles discarded")
+        except Exception as e:
+            logger.error(f"Error flushing tracked candles: {e}")
     
     async def _complete_batch_operations(self) -> None:
         """Complete any ongoing batch operations."""
@@ -1232,15 +1336,23 @@ class EnhancedDataCollector:
                 start_time=datetime.now(timezone.utc)
             )
             
-            # Use the new schema (matches DBCandlestickData and MarketDataSchema)
-            # Get the next ID for insertion to avoid sequence issues  
-            result = self.db_manager.execute(f"SELECT COALESCE(max(id), 0) + 1 as next_id FROM {table_name}")
-            start_id = result[0][0] if result and result[0] else 1
-            
+            # Use INSERT ... ON CONFLICT DO UPDATE SET for historical data too
+            # This ensures consistency with real-time data handling
+            # Use nextval() to generate proper sequential IDs
             query = f"""
-                INSERT OR IGNORE INTO {table_name} 
+                INSERT INTO {table_name} 
                 (id, symbol, interval, open_time_ms, close_time_ms, timestamp_start, timestamp_end, open_price, high_price, low_price, close_price, volume, trade_count)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (nextval('{table_name}_seq'), ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT (symbol, timestamp_start) DO UPDATE SET
+                    timestamp_end = EXCLUDED.timestamp_end,
+                    open_price = EXCLUDED.open_price,
+                    high_price = EXCLUDED.high_price,
+                    low_price = EXCLUDED.low_price,
+                    close_price = EXCLUDED.close_price,
+                    volume = EXCLUDED.volume,
+                    trade_count = EXCLUDED.trade_count,
+                    open_time_ms = EXCLUDED.open_time_ms,
+                    close_time_ms = EXCLUDED.close_time_ms
             """
             
             # Prepare bulk insert data
@@ -1251,7 +1363,6 @@ class EnhancedDataCollector:
                 close_time_ms = int(candle.timestamp_end.timestamp() * 1000)
                 
                 insert_data.append((
-                    start_id + i,  # Explicit ID assignment
                     candle.symbol,
                     interval,  # Add the interval field!
                     open_time_ms,  # Add the open_time_ms field!
@@ -1266,7 +1377,7 @@ class EnhancedDataCollector:
                     candle.trade_count
                 ))
             
-            # Execute the insert
+            # Execute the insert with conflict resolution
             self.db_manager.execute_many(query, insert_data)
             stored_count = len(insert_data)
             
@@ -1334,11 +1445,80 @@ class EnhancedDataCollector:
         while self.running:
             try:
                 await asyncio.sleep(self.config.flush_interval)
+                
+                # Check for tracked candles that might be orphaned (no updates for a while)
+                await self._flush_orphaned_tracked_candles()
+                
+                # Regular buffer flush
                 await self._flush_all_buffers()
                 
             except Exception as e:
                 logger.error(f"Error in periodic flush: {e}")
                 self.stats.errors += 1
+    
+    async def _flush_orphaned_tracked_candles(self) -> None:
+        """
+        Flush tracked candles that haven't been updated in a while.
+        This prevents candles from being stuck indefinitely if updates stop.
+        Only flushes candles that appear to be complete (not unfinished Doji patterns).
+        """
+        try:
+            if not self.latest_candles:
+                return
+            
+            now = datetime.now(timezone.utc)
+            orphaned_candles = []
+            
+            for candle_key, (candle, interval) in list(self.latest_candles.items()):
+                # Calculate how long this candle has been tracked
+                time_since_candle = (now - candle.timestamp_end).total_seconds()
+                
+                # Determine timeout based on interval
+                interval_minutes = self._interval_to_minutes(interval)
+                # INCREASED: Timeout is 10x the interval duration (e.g., 10 minutes for 1m candles)
+                # This is more conservative for 24/7 markets where updates should be frequent
+                timeout_seconds = interval_minutes * 60 * 10
+                
+                if time_since_candle > timeout_seconds:
+                    # Check if this appears to be an unfinished candle
+                    # Unfinished candles typically have O=C=H=L with zero volume/trades
+                    # Real Doji candles have O=C but usually some volume/trades and H/L movement
+                    open_price = float(candle.open_price)
+                    close_price = float(candle.close_price)
+                    high_price = float(candle.high_price)
+                    low_price = float(candle.low_price)
+                    volume = float(candle.volume)
+                    
+                    is_perfect_doji = (open_price == close_price == high_price == low_price)
+                    has_no_activity = (volume == 0 and candle.trade_count == 0)
+                    
+                    if is_perfect_doji and has_no_activity:
+                        logger.warning(f"🚫 Skipping orphaned unfinished candle: {candle.symbol} {interval} at {candle.timestamp_end} (O=C=H=L={open_price}, vol=0, trades=0)")
+                        # Remove from tracking but don't store it
+                        del self.latest_candles[candle_key]
+                        continue
+                    
+                    logger.warning(f"🕐 Orphaned candle detected: {candle.symbol} {interval} at {candle.timestamp_end} (idle for {time_since_candle:.0f}s, timeout: {timeout_seconds}s)")
+                    orphaned_candles.append((candle_key, candle, interval))
+                else:
+                    # Log active tracking (but only at debug level to avoid spam)
+                    logger.debug(f"📍 Still tracking: {candle.symbol} {interval} (idle for {time_since_candle:.0f}s/{timeout_seconds}s)")
+            
+            # Flush orphaned candles (only complete ones)
+            for candle_key, candle, interval in orphaned_candles:
+                self.candle_buffer.append((candle, interval))
+                self.stats.candles_collected += 1
+                del self.latest_candles[candle_key]
+                logger.info(f"✅ Flushed orphaned candle: {candle.symbol} {interval} from {candle.timestamp_end}")
+            
+            if orphaned_candles:
+                logger.warning(f"Flushed {len(orphaned_candles)} orphaned candles - this may indicate connectivity issues")
+            elif self.latest_candles:
+                # Log how many candles we're actively tracking
+                logger.debug(f"📊 Currently tracking {len(self.latest_candles)} active candles")
+                
+        except Exception as e:
+            logger.error(f"Error flushing orphaned tracked candles: {e}")
     
     async def _periodic_stats(self) -> None:
         """Periodically log collection statistics."""
@@ -1577,15 +1757,22 @@ class EnhancedDataCollector:
             with self.db_manager.get_connection() as conn:
                 cursor = conn.cursor()
                 
-                # Insert using the new schema (matches DBCandlestickData and MarketDataSchema)
-                # Get the next ID for insertion to avoid sequence issues
-                result = self.db_manager.execute(f"SELECT COALESCE(max(id), 0) + 1 as next_id FROM {table_name}")
-                start_id = result[0][0] if result and result[0] else 1
-                
+                # Use INSERT ... ON CONFLICT DO UPDATE SET for consistency
+                # Use nextval() to generate proper sequential IDs
                 query = f"""
-                    INSERT OR IGNORE INTO {table_name} 
+                    INSERT INTO {table_name} 
                     (id, symbol, interval, open_time_ms, close_time_ms, timestamp_start, timestamp_end, open_price, high_price, low_price, close_price, volume, trade_count)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    VALUES (nextval('{table_name}_seq'), ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    ON CONFLICT (symbol, timestamp_start) DO UPDATE SET
+                        timestamp_end = EXCLUDED.timestamp_end,
+                        open_price = EXCLUDED.open_price,
+                        high_price = EXCLUDED.high_price,
+                        low_price = EXCLUDED.low_price,
+                        close_price = EXCLUDED.close_price,
+                        volume = EXCLUDED.volume,
+                        trade_count = EXCLUDED.trade_count,
+                        open_time_ms = EXCLUDED.open_time_ms,
+                        close_time_ms = EXCLUDED.close_time_ms
                 """
                 
                 # Prepare insert data to match the new schema
@@ -1596,7 +1783,6 @@ class EnhancedDataCollector:
                     close_time_ms = int(candle['timestamp_end'].timestamp() * 1000)
                     
                     insert_data.append((
-                        start_id + i,  # Explicit ID assignment
                         candle['symbol'],
                         interval,  # Add the interval field!
                         open_time_ms,  # Add the open_time_ms field!
@@ -1611,7 +1797,7 @@ class EnhancedDataCollector:
                         candle.get('trade_count', 0)  # Default to 0 if not provided
                     ))
                 
-                # Execute the insert
+                # Execute the insert with conflict resolution
                 self.db_manager.execute_many(query, insert_data)
                 stored_count = len(insert_data)
                 
