@@ -5,7 +5,7 @@
     "default_timeframes": ["1m", "5m", "15m"],
     "sync_window_minutes": 60,
     "min_candles_required": 3,
-    "data_quality_threshold": 60.0
+    "data_quality_threshold": 0.0
   },
   "pattern_detection": {
     "min_pattern_confidence": 60.0,

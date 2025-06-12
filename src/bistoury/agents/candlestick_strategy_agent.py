@@ -96,10 +96,14 @@ class CandlestickStrategyConfig:
             style_map = {
                 "technical": NarrativeStyle.TECHNICAL,
                 "TECHNICAL": NarrativeStyle.TECHNICAL,
-                "casual": NarrativeStyle.CASUAL,
-                "CASUAL": NarrativeStyle.CASUAL,
-                "formal": NarrativeStyle.FORMAL,
-                "FORMAL": NarrativeStyle.FORMAL
+                "contextual": NarrativeStyle.CONTEXTUAL,
+                "CONTEXTUAL": NarrativeStyle.CONTEXTUAL,
+                "comprehensive": NarrativeStyle.COMPREHENSIVE,
+                "COMPREHENSIVE": NarrativeStyle.COMPREHENSIVE,
+                "concise": NarrativeStyle.CONCISE,
+                "CONCISE": NarrativeStyle.CONCISE,
+                "educational": NarrativeStyle.EDUCATIONAL,
+                "EDUCATIONAL": NarrativeStyle.EDUCATIONAL
             }
             
             # Load from config
@@ -473,8 +477,34 @@ class CandlestickStrategyAgent(BaseAgent):
         """Process new candlestick data and perform pattern analysis."""
         
         try:
-            # Parse candlestick data
-            candle_data = CandlestickData(**payload.get("candle_data", {}))
+            # Parse candlestick data - handle both nested and direct payload formats
+            if "candle_data" in payload:
+                # Nested format
+                candle_args = payload["candle_data"]
+            else:
+                # Direct format - map payload fields to CandlestickData constructor
+                timestamp_ms = int(payload.get("timestamp", 0))
+                timestamp = datetime.fromtimestamp(timestamp_ms / 1000, tz=timezone.utc) if timestamp_ms else datetime.now(timezone.utc)
+                
+                # Map timeframe string to enum
+                timeframe_mapping = {
+                    "1m": Timeframe.ONE_MINUTE,
+                    "5m": Timeframe.FIVE_MINUTES,
+                    "15m": Timeframe.FIFTEEN_MINUTES
+                }
+                
+                candle_args = {
+                    "timestamp": timestamp,
+                    "symbol": symbol,
+                    "timeframe": timeframe_mapping.get(timeframe, Timeframe.ONE_MINUTE),
+                    "open": Decimal(str(payload.get("open", "0"))),
+                    "high": Decimal(str(payload.get("high", "0"))),
+                    "low": Decimal(str(payload.get("low", "0"))),
+                    "close": Decimal(str(payload.get("close", "0"))),
+                    "volume": Decimal(str(payload.get("volume", "0")))
+                }
+            
+            candle_data = CandlestickData(**candle_args)
             
             # Add to data buffer
             self._add_to_buffer(symbol, timeframe, candle_data)
@@ -553,8 +583,8 @@ class CandlestickStrategyAgent(BaseAgent):
             last_analysis_key = f"{symbol}_last_analysis"
             last_analysis_time = getattr(self, last_analysis_key, None)
             
-            # Throttle analysis to prevent excessive signals (min 10 seconds between analyses for testing)
-            min_analysis_interval = timedelta(seconds=10)
+            # Throttle analysis to prevent excessive signals (min 1 second for historical replay, 10 for live)
+            min_analysis_interval = timedelta(seconds=1)  # Reduced for historical paper trading
             if last_analysis_time and (current_time - last_analysis_time) < min_analysis_interval:
                 self.logger.info(f"⏳ Throttling analysis for {symbol} (last analysis {(current_time - last_analysis_time).total_seconds():.1f}s ago)")
                 return
@@ -586,7 +616,7 @@ class CandlestickStrategyAgent(BaseAgent):
             self.logger.info(f"🎯 Using primary timeframe: {primary_timeframe}")
             
             # Ensure we have enough data for meaningful analysis
-            min_candles_required = 3  # Reduced for testing
+            min_candles_required = 2  # Reduced for historical paper trading
             primary_candles = timeframe_data.get(primary_timeframe, [])
             if len(primary_candles) < min_candles_required:
                 self.logger.info(f"📊 Insufficient data for analysis: {len(primary_candles)} < {min_candles_required} candles")
@@ -608,7 +638,7 @@ class CandlestickStrategyAgent(BaseAgent):
             has_patterns = analysis_result.total_patterns_detected > 0
             
             # Load quality threshold from centralized config
-            quality_threshold = self.config_manager.get_decimal('strategy', 'timeframe_analysis', 'data_quality_threshold', default=20)  # Default 20 for testing
+            quality_threshold = self.config_manager.get_decimal('strategy', 'timeframe_analysis', 'data_quality_threshold', default=0)  # Default 0 for historical paper trading
                 
             meets_quality = analysis_result.data_quality_score >= quality_threshold
             meets_latency = analysis_result.meets_latency_requirement
