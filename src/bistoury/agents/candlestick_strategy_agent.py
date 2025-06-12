@@ -467,7 +467,7 @@ class CandlestickStrategyAgent(BaseAgent):
             
         self.logger.info(f"📊 Strategy received market data: {symbol} {timeframe} ({data_type})")
         
-        if data_type == "candle" and symbol in self.config.symbols:
+        if data_type in ["candle", "candlestick"] and symbol in self.config.symbols:
             await self._process_candlestick_data(symbol, timeframe, data_payload)
             
         elif data_type == "volume" and symbol in self.config.symbols:

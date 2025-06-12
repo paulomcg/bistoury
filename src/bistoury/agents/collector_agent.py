@@ -713,7 +713,7 @@ class CollectorAgent(BaseAgent):
                 source="collector_agent_historical",
                 data={
                     "timeframe": interval,
-                    "data_type": "candlestick",
+                    "data_type": "candle",
                     "candle_data": candle_data.model_dump()
                 }
             )
