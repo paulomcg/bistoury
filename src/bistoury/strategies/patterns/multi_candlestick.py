@@ -843,21 +843,23 @@ class MultiPatternRecognizer:
         
         patterns = []
         
-        # Check two-candle patterns if we have at least 2 candles
+        # Check two-candle patterns across all possible consecutive pairs
         if len(candles) >= 2:
-            last_two = candles[-2:]
-            for detector in self.two_candle_detectors:
-                pattern = detector.detect(last_two, volume_profile)
-                if pattern:
-                    patterns.append(pattern)
+            for i in range(len(candles) - 1):
+                two_candle_sequence = candles[i:i+2]
+                for detector in self.two_candle_detectors:
+                    pattern = detector.detect(two_candle_sequence, volume_profile)
+                    if pattern:
+                        patterns.append(pattern)
         
-        # Check three-candle patterns if we have at least 3 candles
+        # Check three-candle patterns across all possible consecutive triplets
         if len(candles) >= 3:
-            last_three = candles[-3:]
-            for detector in self.three_candle_detectors:
-                pattern = detector.detect(last_three, volume_profile)
-                if pattern:
-                    patterns.append(pattern)
+            for i in range(len(candles) - 2):
+                three_candle_sequence = candles[i:i+3]
+                for detector in self.three_candle_detectors:
+                    pattern = detector.detect(three_candle_sequence, volume_profile)
+                    if pattern:
+                        patterns.append(pattern)
         
         # Sort by confidence (highest first)
         patterns.sort(key=lambda p: p.confidence, reverse=True)

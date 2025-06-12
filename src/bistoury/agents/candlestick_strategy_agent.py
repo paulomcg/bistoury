@@ -583,8 +583,8 @@ class CandlestickStrategyAgent(BaseAgent):
             last_analysis_key = f"{symbol}_last_analysis"
             last_analysis_time = getattr(self, last_analysis_key, None)
             
-            # Throttle analysis to prevent excessive signals (min 1 second for historical replay, 10 for live)
-            min_analysis_interval = timedelta(seconds=1)  # Reduced for historical paper trading
+            # Throttle analysis to prevent excessive signals (disabled for historical paper trading)
+            min_analysis_interval = timedelta(seconds=0.1)  # Very short interval for historical paper trading
             if last_analysis_time and (current_time - last_analysis_time) < min_analysis_interval:
                 self.logger.info(f"⏳ Throttling analysis for {symbol} (last analysis {(current_time - last_analysis_time).total_seconds():.1f}s ago)")
                 return
@@ -607,8 +607,8 @@ class CandlestickStrategyAgent(BaseAgent):
                 if timeframe_str in timeframe_mapping:
                     timeframe_enum = timeframe_mapping[timeframe_str]
                     candles = self.market_data_buffer[symbol][timeframe_str]
-                    # Use more candles for better multi-pattern detection
-                    timeframe_data[timeframe_enum] = candles[-50:] if len(candles) >= 50 else candles
+                    # Use more candles for better multi-pattern detection (reduced for historical paper trading)
+                    timeframe_data[timeframe_enum] = candles[-10:] if len(candles) >= 10 else candles
                     self.logger.info(f"📊 Prepared {len(timeframe_data[timeframe_enum])} candles for {timeframe_str} analysis")
                 
             # Set primary timeframe to the first (and likely only) timeframe we have data for
