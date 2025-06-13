@@ -123,6 +123,22 @@ def _worker_process(worker_id: int, study_name: str, storage_url: str, n_trials_
     """Worker process function for multiprocessing optimization."""
     worker_db_path = None
     try:
+        # CRITICAL: Suppress logging IMMEDIATELY to prevent any file logging conflicts
+        # This must be the very first thing we do in worker processes
+        _suppress_logging_and_output(debug)
+        
+        # CRITICAL: Disable all existing loggers that might already be configured
+        import logging
+        # Force shutdown of any existing logging handlers that might cause rotation
+        logging.shutdown()
+        # Clear all existing handlers from root logger
+        for handler in logging.root.handlers[:]:
+            try:
+                handler.close()
+                logging.root.removeHandler(handler)
+            except:
+                pass
+        
         # Set up signal handling in worker
         def worker_signal_handler(signum, frame):
             if shutdown_event:
@@ -137,10 +153,6 @@ def _worker_process(worker_id: int, study_name: str, storage_url: str, n_trials_
         
         # Set up separate database for this worker
         worker_db_path = _setup_worker_database(worker_id, debug)
-        
-        # Suppress logging in worker processes unless debug mode
-        if not debug:
-            _suppress_logging_and_output(debug)
         
         # Create study connection with retry logic for database locks
         max_retries = 5
@@ -195,36 +207,56 @@ def _worker_process(worker_id: int, study_name: str, storage_url: str, n_trials_
 def _suppress_logging_and_output(debug: bool):
     """Suppress logging and output for cleaner optimization runs."""
     if not debug:
-        # Suppress all loggers except our trial logger
-        for name in logging.root.manager.loggerDict:
-            logging.getLogger(name).setLevel(logging.WARNING)
-        logging.basicConfig(level=logging.WARNING)
+        # CRITICAL: Completely disable all file logging to prevent rotation conflicts
+        # Get the root logger and remove ALL handlers first
+        root_logger = logging.getLogger()
+        for handler in root_logger.handlers[:]:
+            root_logger.removeHandler(handler)
         
-        # Set optimizer.trial logger to INFO for trial-end and progress messages
+        # Disable all existing loggers and remove their handlers
+        for name in list(logging.root.manager.loggerDict.keys()):
+            logger = logging.getLogger(name)
+            # Remove ALL handlers from this logger
+            for handler in logger.handlers[:]:
+                logger.removeHandler(handler)
+            # Set to WARNING to suppress most output
+            logger.setLevel(logging.WARNING)
+            # Prevent propagation to avoid inherited handlers
+            logger.propagate = False
+        
+        # Reconfigure basic logging with no file handlers
+        logging.basicConfig(
+            level=logging.WARNING,
+            handlers=[],  # No handlers initially
+            force=True    # Force reconfiguration
+        )
+        
+        # Set up ONLY our trial logger with console output
         trial_logger = logging.getLogger("optimizer.trial")
         trial_logger.setLevel(logging.INFO)
-        
-        # Attach a StreamHandler if not already present
-        if not any(isinstance(h, logging.StreamHandler) for h in trial_logger.handlers):
-            handler = logging.StreamHandler(sys.stderr)  # Use stderr to avoid stdout suppression issues
-            handler.setLevel(logging.INFO)
-            handler.setFormatter(logging.Formatter("%(asctime)s | %(levelname)s | %(message)s", "%Y-%m-%d %H:%M:%S"))
-            trial_logger.addHandler(handler)
         trial_logger.propagate = False
         
-        # Clear root handlers to avoid file logging conflicts in multiprocessing
-        logging.root.handlers = [logging.NullHandler()]
+        # Remove any existing handlers from trial logger
+        for handler in trial_logger.handlers[:]:
+            trial_logger.removeHandler(handler)
         
-        # Remove any file handlers from all loggers to prevent rotation conflicts
-        for name in logging.root.manager.loggerDict:
-            logger = logging.getLogger(name)
-            # Remove file handlers that could cause rotation conflicts
-            handlers_to_remove = []
-            for handler in logger.handlers:
-                if hasattr(handler, 'baseFilename'):  # File-based handlers
-                    handlers_to_remove.append(handler)
-            for handler in handlers_to_remove:
-                logger.removeHandler(handler)
+        # Add only a console handler for trial messages
+        console_handler = logging.StreamHandler(sys.stderr)
+        console_handler.setLevel(logging.INFO)
+        console_handler.setFormatter(logging.Formatter("%(asctime)s | %(levelname)s | %(message)s", "%Y-%m-%d %H:%M:%S"))
+        trial_logger.addHandler(console_handler)
+        
+        # Aggressively disable the rotating file handler that's causing issues
+        try:
+            # Disable all rotating file handlers to prevent conflicts
+            import logging.handlers as log_handlers
+            # Override the RotatingFileHandler to do nothing
+            def disabled_rotating_handler(*args, **kwargs):
+                return logging.NullHandler()
+            log_handlers.RotatingFileHandler = disabled_rotating_handler
+            log_handlers.TimedRotatingFileHandler = disabled_rotating_handler
+        except Exception:
+            pass  # If this fails, continue anyway
         
         # Suppress stdout but keep stderr for important messages
         sys.stdout = io.StringIO()
@@ -253,21 +285,56 @@ def get_search_space_from_strategy_config(strategy_config_path: str) -> Dict[str
     return search_space
 
 
-def create_optuna_study(study_name: str, storage_dir: str) -> optuna.Study:
+def create_optuna_study(study_name: str, storage_dir: str, sampler_type: str = "tpe") -> optuna.Study:
     """
-    Create or load an Optuna study with SQLite storage in the given directory.
+    Create or load an Optuna study with SQLite storage and configurable sampling strategy.
     """
     os.makedirs(storage_dir, exist_ok=True)
     storage_path = os.path.join(storage_dir, f"{study_name}.db")
     storage_url = f"sqlite:///{storage_path}"
-    return optuna.create_study(study_name=study_name, storage=storage_url, direction="maximize", load_if_exists=True)
+    
+    # Choose sampler based on strategy
+    if sampler_type == "random":
+        # Pure random sampling for maximum exploration
+        sampler = optuna.samplers.RandomSampler()
+    elif sampler_type == "grid":
+        # Grid search for exhaustive coverage (limited parameters)
+        # Note: Grid search requires predefined search space
+        sampler = optuna.samplers.GridSampler()
+    elif sampler_type == "cmaes":
+        # CMA-ES for continuous optimization
+        sampler = optuna.samplers.CmaEsSampler(
+            n_startup_trials=50,
+            independent_sampler=optuna.samplers.RandomSampler()
+        )
+    else:  # "tpe" (default)
+        # TPE sampler with enhanced exploration for exhaustive search
+        sampler = optuna.samplers.TPESampler(
+            n_startup_trials=50,  # More random trials for better exploration
+            n_ei_candidates=100,  # More candidates for expected improvement
+            multivariate=True,    # Consider parameter interactions
+            group=True,           # Group related parameters
+            warn_independent_sampling=True,
+            constant_liar=True    # Better for parallel optimization
+        )
+    
+    return optuna.create_study(
+        study_name=study_name, 
+        storage=storage_url, 
+        direction="maximize", 
+        load_if_exists=True,
+        sampler=sampler
+    )
 
 
 def build_trial_config(base_config: dict, search_space: dict, trial: optuna.Trial) -> dict:
     """
     Given a base config and search space, update the config with trial-suggested values.
+    Includes parameter constraints for more logical combinations.
     """
     config = base_config.copy()
+    
+    # Suggest parameters with logical constraints
     for param, (min_val, max_val, param_type) in search_space.items():
         if param_type == "float":
             config[param] = trial.suggest_float(param, min_val, max_val)
@@ -276,6 +343,27 @@ def build_trial_config(base_config: dict, search_space: dict, trial: optuna.Tria
         elif param_type == "categorical":
             # For categorical, min_val is a list of choices
             config[param] = trial.suggest_categorical(param, min_val)
+    
+    # Add logical constraints to ensure sensible parameter combinations
+    
+    # Ensure take profit is always higher than stop loss for positive risk/reward
+    if 'default_take_profit_pct' in config and 'default_stop_loss_pct' in config:
+        if config['default_take_profit_pct'] <= config['default_stop_loss_pct']:
+            # Adjust take profit to be at least 1.5x stop loss
+            config['default_take_profit_pct'] = config['default_stop_loss_pct'] * 1.5
+    
+    # Ensure risk/reward ratio is consistent with stop/take profit
+    if all(k in config for k in ['min_risk_reward_ratio', 'default_take_profit_pct', 'default_stop_loss_pct']):
+        actual_ratio = config['default_take_profit_pct'] / config['default_stop_loss_pct']
+        if config['min_risk_reward_ratio'] > actual_ratio:
+            # Adjust min_risk_reward_ratio to be achievable
+            config['min_risk_reward_ratio'] = min(actual_ratio * 0.9, config['min_risk_reward_ratio'])
+    
+    # Ensure confluence score is not lower than pattern confidence (logical hierarchy)
+    if 'min_confluence_score' in config and 'min_pattern_confidence' in config:
+        if config['min_confluence_score'] < config['min_pattern_confidence']:
+            config['min_confluence_score'] = config['min_pattern_confidence'] + trial.suggest_float(f"{param}_adjustment", 0, 10)
+    
     return config
 
 
@@ -302,48 +390,60 @@ def objective_factory(
         config.setdefault("symbol", base_config.get("symbol", "BTC"))
         config.setdefault("timeframe", base_config.get("timeframe", "1m"))
         config.setdefault("initial_balance", base_config.get("initial_balance", 10000))
-        config.setdefault("replay_speed", base_config.get("replay_speed", 100.0))
+        config.setdefault("replay_speed", base_config.get("replay_speed", 50.0))
         config.setdefault("min_confidence", base_config.get("min_confidence", 0.7))
-        config.setdefault("duration", base_config.get("duration", 60))
+        config.setdefault("duration", base_config.get("duration", 300))  # Longer duration for more data
         
-        result_file = None
-        try:
-            # Check shutdown event periodically during backtest
-            result = asyncio.run(BacktestEngine(config, output_path=output_dir, shutdown_event=shutdown_event).run_backtest())
-            
-            # Check again after backtest completes
+        # Test multiple symbols for more diverse market conditions
+        symbols_to_test = ["BTC"]  # Start with BTC, can expand to ["BTC", "ETH", "SOL"]
+        total_sharpe = 0.0
+        successful_tests = 0
+        
+        for symbol in symbols_to_test:
             if shutdown_event and shutdown_event.is_set():
-                logger.info(f"Trial {trial.number} ended: shutdown requested after completion")
+                logger.info(f"Trial {trial.number} ended: shutdown requested during {symbol} test")
                 raise optuna.TrialPruned()
             
-            sharpe = result.performance.sharpe_ratio
+            # Update config for this symbol
+            symbol_config = config.copy()
+            symbol_config["symbol"] = symbol
             
-            # Try to infer the result file path (if written)
-            if hasattr(result, 'result_file_path'):
-                result_file = getattr(result, 'result_file_path')
-            
-            # Extract total_pnl and win_rate if available
-            total_pnl = getattr(result.performance, 'total_pnl', None)
-            win_rate = getattr(result.performance, 'win_rate', None)
-            total_pnl_str = f"{total_pnl:.2f}" if total_pnl is not None else "N/A"
-            win_rate_str = f"{(win_rate/100):.2%}" if win_rate is not None else "N/A"
-            
-            if sharpe is None:
-                trial.set_user_attr("error", "No sharpe_ratio returned")
-                logger.info(f"Trial {trial.number} ended: no sharpe_ratio (no result file)")
-                return 0.0
-            
-            logger.info(f"Trial {trial.number} ended: success (result file: {result_file or 'unknown'}, total_pnl: {total_pnl_str}, win_rate: {win_rate_str})")
-            return float(sharpe)
-            
-        except KeyboardInterrupt:
-            # Re-raise KeyboardInterrupt to allow proper handling at higher levels
-            logger.info(f"Trial {trial.number} ended: interrupted by user")
-            raise
-        except Exception as e:
-            trial.set_user_attr("error", str(e))
-            logger.info(f"Trial {trial.number} ended: exception ({e}) (no result file)")
+            try:
+                result = asyncio.run(BacktestEngine(symbol_config, output_path=output_dir, shutdown_event=shutdown_event).run_backtest())
+                
+                if shutdown_event and shutdown_event.is_set():
+                    logger.info(f"Trial {trial.number} ended: shutdown requested after {symbol} completion")
+                    raise optuna.TrialPruned()
+                
+                sharpe = result.performance.sharpe_ratio
+                if sharpe is not None:
+                    total_sharpe += float(sharpe)
+                    successful_tests += 1
+                    
+            except KeyboardInterrupt:
+                logger.info(f"Trial {trial.number} ended: interrupted during {symbol} test")
+                raise
+            except Exception as e:
+                logger.info(f"Trial {trial.number} {symbol} test failed: {e}")
+                # Continue with other symbols
+                continue
+        
+        if successful_tests == 0:
+            trial.set_user_attr("error", "All symbol tests failed")
+            logger.info(f"Trial {trial.number} ended: all tests failed")
             return 0.0
+        
+        # Average sharpe across all successful tests
+        avg_sharpe = total_sharpe / successful_tests
+        
+        # Extract performance metrics for logging
+        total_pnl = getattr(result.performance, 'total_pnl', None) if 'result' in locals() else None
+        win_rate = getattr(result.performance, 'win_rate', None) if 'result' in locals() else None
+        total_pnl_str = f"{total_pnl:.2f}" if total_pnl is not None else "N/A"
+        win_rate_str = f"{(win_rate/100):.2%}" if win_rate is not None else "N/A"
+        
+        logger.info(f"Trial {trial.number} ended: success (avg_sharpe: {avg_sharpe:.4f}, symbols: {successful_tests}/{len(symbols_to_test)}, total_pnl: {total_pnl_str}, win_rate: {win_rate_str})")
+        return avg_sharpe
     
     return objective
 
@@ -397,16 +497,27 @@ def run_optimization(
             storage_url = f"sqlite:///{storage_file}"
             storage = optuna.storages.RDBStorage(url=storage_url)
             
-            # Create study with retry logic for database locks
+            # Create study with retry logic for database locks and advanced sampling
             max_retries = 5
             study = None
             for attempt in range(max_retries):
                 try:
+                    # Use TPE sampler with enhanced exploration for multiprocessing
+                    sampler = optuna.samplers.TPESampler(
+                        n_startup_trials=max(10, n_trials // 4),  # Scale startup trials with total trials
+                        n_ei_candidates=48,
+                        multivariate=True,
+                        group=True,
+                        warn_independent_sampling=True,
+                        constant_liar=True  # Essential for parallel optimization
+                    )
+                    
                     study = optuna.create_study(
                         study_name=study_name, 
                         storage=storage, 
                         direction="maximize", 
-                        load_if_exists=True
+                        load_if_exists=True,
+                        sampler=sampler
                     )
                     break
                 except optuna.exceptions.DuplicatedStudyError:

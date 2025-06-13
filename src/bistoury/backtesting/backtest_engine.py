@@ -53,6 +53,16 @@ class BacktestEngine:
         Returns:
             BacktestResult: The result object containing all metrics and details.
         """
+        # CRITICAL: Initialize database first (especially important for worker processes)
+        try:
+            from ..database.connection import initialize_database
+            from ..config import Config
+            config = Config.load_from_env()
+            initialize_database(config)
+        except Exception as e:
+            console.print(f"[red]Warning: Database initialization failed: {e}[/red]")
+            # Continue anyway as the worker database setup might handle this
+        
         # Extract config parameters, falling back to config manager defaults
         symbol = self.config.get("symbol", "BTC")
         timeframe = self.config.get("timeframe", "1m")
@@ -98,6 +108,15 @@ class BacktestEngine:
             message_bus=message_bus
         )
 
+        # Extract strategy parameters for the optimizer
+        strategy_parameters = {}
+        for key, value in self.config.items():
+            # Include parameters that should be passed to the strategy agent
+            if key in ['min_pattern_confidence', 'min_confluence_score', 'single_pattern_confidence_threshold',
+                      'min_signal_strength', 'default_stop_loss_pct', 'default_take_profit_pct', 
+                      'min_risk_reward_ratio', 'min_volume_ratio']:
+                strategy_parameters[key] = value
+
         # Create agents
         agents = await create_paper_trading_agents(
             symbol=symbol,
@@ -107,7 +126,8 @@ class BacktestEngine:
             speed=speed,
             balance=balance,
             min_confidence=min_confidence,
-            message_bus=message_bus
+            message_bus=message_bus,
+            strategy_parameters=strategy_parameters
         )
 
         # Register agents and set up subscriptions

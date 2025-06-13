@@ -1,7 +1,7 @@
 import asyncio
 from datetime import datetime
 from decimal import Decimal
-from typing import Optional
+from typing import Optional, Dict, Any
 from ..agents.collector_agent import CollectorAgent, CollectorAgentConfig
 from ..agents.candlestick_strategy_agent import CandlestickStrategyAgent
 from ..agents.position_manager_agent import PositionManagerAgent, PositionManagerConfig
@@ -28,7 +28,8 @@ async def create_paper_trading_agents(
     speed: float,
     balance: float,
     min_confidence: float,
-    message_bus: MessageBus
+    message_bus: MessageBus,
+    strategy_parameters: Optional[Dict[str, Any]] = None
 ) -> list:
     """
     Create and configure agents for paper trading or backtesting.
@@ -60,6 +61,10 @@ async def create_paper_trading_agents(
         "min_confidence_threshold": min_confidence,
         "agent_name": "paper_strategy"
     }
+    
+    # Apply strategy parameters from optimizer if provided
+    if strategy_parameters:
+        strategy_config.update(strategy_parameters)
     strategy_agent = CandlestickStrategyAgent(name="paper_strategy", config=strategy_config)
     strategy_agent.persist_state = False
     strategy_agent._message_bus = message_bus

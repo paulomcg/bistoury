@@ -219,18 +219,44 @@ class CandlestickStrategyAgent(BaseAgent):
         # Get centralized config manager
         self.config_manager = get_config_manager()
         
-        # Use config manager for default values instead of hardcoded ones
-        self.signal_config = signal_config or SignalConfiguration(
-            min_pattern_confidence=self.config_manager.get_decimal(
-                'strategy', 'pattern_detection', 'min_pattern_confidence', default='70'
-            ),
-            min_confluence_score=self.config_manager.get_decimal(
-                'strategy', 'pattern_detection', 'min_confluence_score', default='60'
-            ),
-            min_quality_score=self.config_manager.get_decimal(
-                'strategy', 'pattern_detection', 'min_quality_score', default='50'
+        # Use config manager for default values, but override with passed config if available
+        if signal_config:
+            self.signal_config = signal_config
+        else:
+            # Get defaults from config manager but check if they're overridden in the passed config
+            if isinstance(config, dict):
+                min_pattern_confidence = config.get('min_pattern_confidence', 
+                    self.config_manager.get_decimal('strategy', 'pattern_detection', 'min_pattern_confidence', default='70'))
+                min_confluence_score = config.get('min_confluence_score',
+                    self.config_manager.get_decimal('strategy', 'pattern_detection', 'min_confluence_score', default='60'))
+                min_signal_strength = config.get('min_signal_strength',
+                    self.config_manager.get_decimal('strategy', 'signal_generation', 'min_signal_strength', default='0.6'))
+                # Convert to Decimal if they're not already
+                if not isinstance(min_pattern_confidence, Decimal):
+                    min_pattern_confidence = Decimal(str(min_pattern_confidence))
+                if not isinstance(min_confluence_score, Decimal):
+                    min_confluence_score = Decimal(str(min_confluence_score))
+                if not isinstance(min_signal_strength, Decimal):
+                    min_signal_strength = Decimal(str(min_signal_strength))
+            else:
+                min_pattern_confidence = self.config_manager.get_decimal(
+                    'strategy', 'pattern_detection', 'min_pattern_confidence', default='70'
+                )
+                min_confluence_score = self.config_manager.get_decimal(
+                    'strategy', 'pattern_detection', 'min_confluence_score', default='60'
+                )
+                min_signal_strength = self.config_manager.get_decimal(
+                    'strategy', 'signal_generation', 'min_signal_strength', default='0.6'
+                )
+            
+            self.signal_config = SignalConfiguration(
+                min_pattern_confidence=min_pattern_confidence,
+                min_confluence_score=min_confluence_score,
+                min_quality_score=self.config_manager.get_decimal(
+                    'strategy', 'pattern_detection', 'min_quality_score', default='50'
+                ),
+                min_signal_strength=min_signal_strength
             )
-        )
         
         # Use provided narrative config or create default
         if narrative_config:
@@ -258,11 +284,17 @@ class CandlestickStrategyAgent(BaseAgent):
         )
         
         # Initialize components with config-driven parameters
+        # Use min_pattern_confidence from optimizer config if available, otherwise fall back to config.min_confidence_threshold
+        if isinstance(config, dict) and 'min_pattern_confidence' in config:
+            pattern_recognizer_min_confidence = Decimal(str(config['min_pattern_confidence']))
+        else:
+            pattern_recognizer_min_confidence = Decimal(str(self.config.min_confidence_threshold * 100))
+        
         self.single_pattern_recognizer = SinglePatternRecognizer(
-            min_confidence=Decimal(str(self.config.min_confidence_threshold * 100))
+            min_confidence=pattern_recognizer_min_confidence
         )
         self.multi_pattern_recognizer = MultiPatternRecognizer(
-            min_confidence=Decimal(str(self.config.min_confidence_threshold * 100))
+            min_confidence=pattern_recognizer_min_confidence
         )
         
         # Keep backward compatibility alias

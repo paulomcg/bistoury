@@ -61,145 +61,68 @@
     "include_confluence_details": true
   },
   "optimized_parameters": {
-    "sync_window_minutes": 37,
-    "min_candles_required": 9,
-    "data_quality_threshold": 0.22194356675167903,
-    "min_pattern_confidence": 31.108489042406116,
-    "min_confluence_score": 74.74233216617493,
-    "min_quality_score": 74.83031147807044,
-    "single_pattern_confidence_threshold": 67.49458960610016,
-    "multi_pattern_confidence_threshold": 51.52619672002253,
-    "volume_lookback_periods": 25,
-    "min_volume_ratio": 2.612894052932517,
-    "volume_confirmation_threshold": 1.2728634556473586,
-    "default_stop_loss_pct": 2.1383213001370502,
-    "default_take_profit_pct": 10.068480143793039,
-    "min_risk_reward_ratio": 4.981559846512751,
-    "max_position_size_pct": 71.13964911284137,
-    "emergency_stop_loss_pct": 14.928714657021185,
-    "signal_expiry_minutes": 30,
-    "max_signals_per_symbol": 9,
-    "min_signal_strength": 0.33507015865441525,
-    "max_analysis_time_ms": 2803,
-    "analysis_throttle_seconds": 36,
-    "max_data_buffer_size": 990,
-    "data_cleanup_interval_seconds": 281
+    "min_pattern_confidence": 64.02440041921403,
+    "min_confluence_score": 69.00360372603164,
+    "single_pattern_confidence_threshold": 21.146563065379276,
+    "min_signal_strength": 0.12964771721371962,
+    "default_stop_loss_pct": 4.171694074941709,
+    "default_take_profit_pct": 14.958898660799521,
+    "min_risk_reward_ratio": 0.6697831144809061,
+    "min_volume_ratio": 3.8340682211257393
   },
   "tunable_parameters": {
-    "sync_window_minutes": {
-      "min": 10,
-      "max": 240,
-      "type": "int"
-    },
-    "min_candles_required": {
-      "min": 1,
-      "max": 20,
-      "type": "int"
-    },
-    "data_quality_threshold": {
-      "min": 0.0,
-      "max": 1.0,
-      "type": "float"
-    },
     "min_pattern_confidence": {
-      "min": 0.0,
-      "max": 100.0,
-      "type": "float"
+      "min": 20.0,
+      "max": 90.0,
+      "type": "float",
+      "description": "Core threshold for pattern detection - wider range for more diversity"
     },
     "min_confluence_score": {
-      "min": 0.0,
-      "max": 100.0,
-      "type": "float"
-    },
-    "min_quality_score": {
-      "min": 0.0,
-      "max": 100.0,
-      "type": "float"
+      "min": 30.0,
+      "max": 95.0,
+      "type": "float",
+      "description": "Critical for signal quality - test very low and very high thresholds"
     },
     "single_pattern_confidence_threshold": {
-      "min": 0.0,
-      "max": 100.0,
-      "type": "float"
+      "min": 15.0,
+      "max": 85.0,
+      "type": "float",
+      "description": "Sensitivity for individual patterns - extreme range for diversity"
     },
-    "multi_pattern_confidence_threshold": {
-      "min": 0.0,
-      "max": 100.0,
-      "type": "float"
-    },
-    "volume_lookback_periods": {
-      "min": 5,
-      "max": 100,
-      "type": "int"
-    },
-    "min_volume_ratio": {
-      "min": 0.5,
-      "max": 5.0,
-      "type": "float"
-    },
-    "volume_confirmation_threshold": {
-      "min": 0.5,
-      "max": 5.0,
-      "type": "float"
+    "min_signal_strength": {
+      "min": 0.1,
+      "max": 0.95,
+      "type": "float",
+      "description": "Final signal filter - test very permissive to very restrictive"
     },
     "default_stop_loss_pct": {
       "min": 0.5,
-      "max": 10.0,
-      "type": "float"
+      "max": 8.0,
+      "type": "float",
+      "description": "Stop loss percentage - wider range including tight and loose stops"
     },
     "default_take_profit_pct": {
       "min": 1.0,
       "max": 20.0,
-      "type": "float"
+      "type": "float",
+      "description": "Take profit percentage - test conservative to aggressive targets"
     },
     "min_risk_reward_ratio": {
       "min": 0.5,
-      "max": 5.0,
-      "type": "float"
+      "max": 6.0,
+      "type": "float",
+      "description": "Risk/reward ratio - include sub-optimal and very conservative ratios"
     },
-    "max_position_size_pct": {
-      "min": 1.0,
-      "max": 100.0,
-      "type": "float"
-    },
-    "emergency_stop_loss_pct": {
-      "min": 1.0,
-      "max": 20.0,
-      "type": "float"
-    },
-    "signal_expiry_minutes": {
-      "min": 1,
-      "max": 60,
-      "type": "int"
-    },
-    "max_signals_per_symbol": {
-      "min": 1,
-      "max": 10,
-      "type": "int"
-    },
-    "min_signal_strength": {
-      "min": 0.0,
-      "max": 1.0,
-      "type": "float"
-    },
-    "max_analysis_time_ms": {
-      "min": 100,
-      "max": 10000,
-      "type": "int"
-    },
-    "analysis_throttle_seconds": {
-      "min": 1,
-      "max": 60,
-      "type": "int"
-    },
-    "max_data_buffer_size": {
-      "min": 100,
-      "max": 10000,
-      "type": "int"
-    },
-    "data_cleanup_interval_seconds": {
-      "min": 60,
-      "max": 3600,
-      "type": "int"
+    "min_volume_ratio": {
+      "min": 0.8,
+      "max": 4.0,
+      "type": "float",
+      "description": "Volume confirmation - test minimal to very strict volume requirements"
     }
-  }
+  },
+  "duration": 300,
+  "replay_speed": 50.0,
+  "timeframe": "1m",
+  "symbol": "BTC",
+  "initial_balance": 10000
 }
