@@ -18,17 +18,6 @@ import subprocess
 import warnings
 import shutil
 
-# Suppress urllib3 warnings early and comprehensively
-warnings.filterwarnings("ignore", message="urllib3 v2 only supports OpenSSL 1.1.1+")
-warnings.filterwarnings("ignore", category=UserWarning, module="urllib3")
-
-# Also suppress at the urllib3 level if possible
-try:
-    import urllib3
-    urllib3.disable_warnings()
-except ImportError:
-    pass
-
 # List of known loggers to suppress
 KNOWN_LOGGERS = [
     '',  # root
@@ -134,18 +123,6 @@ def _worker_process(worker_id: int, study_name: str, storage_url: str, n_trials_
     """Worker process function for multiprocessing optimization."""
     worker_db_path = None
     try:
-        # CRITICAL: Suppress urllib3 warnings FIRST before any other imports
-        import warnings
-        warnings.filterwarnings("ignore", message="urllib3 v2 only supports OpenSSL 1.1.1+")
-        warnings.filterwarnings("ignore", category=UserWarning, module="urllib3")
-        
-        # Also suppress at the urllib3 level if possible
-        try:
-            import urllib3
-            urllib3.disable_warnings()
-        except:
-            pass
-        
         # Set up signal handling in worker
         def worker_signal_handler(signum, frame):
             if shutdown_event:
@@ -387,15 +364,6 @@ def run_optimization(
     - Saves best parameters to strategy.json
     """
     global _worker_processes, _shutdown_event
-    
-    # Suppress urllib3 warnings comprehensively before any operations
-    warnings.filterwarnings("ignore", message="urllib3 v2 only supports OpenSSL 1.1.1+")
-    warnings.filterwarnings("ignore", category=UserWarning, module="urllib3")
-    try:
-        import urllib3
-        urllib3.disable_warnings()
-    except ImportError:
-        pass
     
     # Set up appropriate signal handling based on n_jobs
     if n_jobs > 1:
