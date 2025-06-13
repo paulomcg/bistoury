@@ -478,10 +478,10 @@ async def _create_paper_trading_agents(
 async def _get_available_date_range(symbol: str, timeframe: str) -> tuple[Optional[datetime], Optional[datetime]]:
     """Get the available date range for historical data."""
     try:
-        # Switch to production database
-        switcher = get_database_switcher()
-        db_manager = switcher.switch_to_database('production')
-        conn = db_manager.get_connection()
+        # Use the current database manager instead of forcing switch to production
+        # This allows worker processes to use their own database copies
+        from src.bistoury.database.connection import get_connection
+        conn = get_connection()
         
         # Query date range from candle data
         table_name = f"candles_{timeframe}"

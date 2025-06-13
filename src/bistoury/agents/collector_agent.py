@@ -22,6 +22,7 @@ from ..models.agent_messages import (
 )
 from ..models.market_data import CandlestickData, Timeframe
 from .base import BaseAgent, AgentType, AgentState, AgentHealth
+from src.bistoury.database.connection import get_connection
 
 logger = get_logger(__name__)
 
@@ -572,10 +573,9 @@ class CollectorAgent(BaseAgent):
         try:
             self.logger.info("🎬 Starting historical replay loop")
             
-            # Get database manager - switch_to_database returns DatabaseManager directly
-            switcher = get_database_switcher()
-            db_manager = switcher.switch_to_database('production')  # Returns DatabaseManager instance
-            conn = db_manager.get_connection()
+            # Use the current database manager instead of forcing switch to production
+            # This allows worker processes to use their own database copies
+            conn = get_connection()
             
             self.logger.info(f"Starting historical replay from {self.collector_config.replay_start_date} to {self.collector_config.replay_end_date}")
             

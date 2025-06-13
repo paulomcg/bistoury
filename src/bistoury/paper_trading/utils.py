@@ -16,6 +16,7 @@ from ..database import get_database_switcher
 from ..models.agent_messages import MessageType
 from ..agents.messaging import MessageFilter
 from rich.console import Console
+from src.bistoury.database.connection import get_connection
 
 console = Console()
 
@@ -96,9 +97,7 @@ async def get_available_date_range(symbol: str, timeframe: str) -> tuple[Optiona
     Returns (min_date, max_date) or (None, None) if unavailable.
     """
     try:
-        switcher = get_database_switcher()
-        db_manager = switcher.switch_to_database('production')
-        conn = db_manager.get_connection()
+        conn = get_connection()
         table_name = f"candles_{timeframe}"
         query = f"""
         SELECT MIN(timestamp_start) as min_date, MAX(timestamp_start) as max_date

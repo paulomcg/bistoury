@@ -15,6 +15,19 @@ import threading
 import time
 import tempfile
 import subprocess
+import warnings
+import shutil
+
+# Suppress urllib3 warnings early and comprehensively
+warnings.filterwarnings("ignore", message="urllib3 v2 only supports OpenSSL 1.1.1+")
+warnings.filterwarnings("ignore", category=UserWarning, module="urllib3")
+
+# Also suppress at the urllib3 level if possible
+try:
+    import urllib3
+    urllib3.disable_warnings()
+except ImportError:
+    pass
 
 # List of known loggers to suppress
 KNOWN_LOGGERS = [
@@ -65,25 +78,109 @@ def _multiprocessing_signal_handler(signum, frame):
     
     sys.exit(130)
 
+def _setup_worker_database(worker_id: int, debug: bool) -> str:
+    """Set up a separate database file for a worker process."""
+    try:
+        # Create a unique database file for this worker
+        worker_db_path = f"data/bistoury_worker_{worker_id}_{os.getpid()}.db"
+        
+        # Copy the main database to the worker database
+        main_db_path = "data/bistoury.db"
+        if os.path.exists(main_db_path):
+            shutil.copy2(main_db_path, worker_db_path)
+            if debug:
+                print(f"[DEBUG] Worker {worker_id} created database copy: {worker_db_path}")
+        else:
+            if debug:
+                print(f"[DEBUG] Worker {worker_id} main database not found, will create new: {worker_db_path}")
+        
+        # Set environment variable for this worker to use its own database
+        os.environ['DATABASE_PATH'] = worker_db_path
+        
+        # CRITICAL: Reset the global database manager so it gets reinitialized with the new path
+        from src.bistoury.database.connection import _db_manager
+        import src.bistoury.database.connection as db_conn
+        db_conn._db_manager = None
+        
+        # Force reinitialization of config and database manager with new path
+        from src.bistoury.config import Config
+        config = Config.load_from_env()
+        from src.bistoury.database.connection import initialize_database
+        initialize_database(config)
+        
+        if debug:
+            print(f"[DEBUG] Worker {worker_id} reinitialized database manager with path: {worker_db_path}")
+        
+        return worker_db_path
+        
+    except Exception as e:
+        if debug:
+            print(f"[ERROR] Worker {worker_id} failed to setup database: {e}")
+        raise
+
+def _cleanup_worker_database(worker_db_path: str, debug: bool):
+    """Clean up worker database file."""
+    try:
+        if os.path.exists(worker_db_path):
+            os.remove(worker_db_path)
+            if debug:
+                print(f"[DEBUG] Cleaned up worker database: {worker_db_path}")
+    except Exception as e:
+        if debug:
+            print(f"[WARNING] Failed to cleanup worker database {worker_db_path}: {e}")
+
 def _worker_process(worker_id: int, study_name: str, storage_url: str, n_trials_per_worker: int, 
                    base_config: dict, search_space: dict, output_dir: str, debug: bool, shutdown_event):
     """Worker process function for multiprocessing optimization."""
+    worker_db_path = None
     try:
+        # CRITICAL: Suppress urllib3 warnings FIRST before any other imports
+        import warnings
+        warnings.filterwarnings("ignore", message="urllib3 v2 only supports OpenSSL 1.1.1+")
+        warnings.filterwarnings("ignore", category=UserWarning, module="urllib3")
+        
+        # Also suppress at the urllib3 level if possible
+        try:
+            import urllib3
+            urllib3.disable_warnings()
+        except:
+            pass
+        
         # Set up signal handling in worker
         def worker_signal_handler(signum, frame):
             if shutdown_event:
                 shutdown_event.set()
+            # Clean up database before exit
+            if worker_db_path:
+                _cleanup_worker_database(worker_db_path, debug)
+            sys.exit(130)
         
         signal.signal(signal.SIGINT, worker_signal_handler)
         signal.signal(signal.SIGTERM, worker_signal_handler)
+        
+        # Set up separate database for this worker
+        worker_db_path = _setup_worker_database(worker_id, debug)
         
         # Suppress logging in worker processes unless debug mode
         if not debug:
             _suppress_logging_and_output(debug)
         
-        # Create study connection
-        storage = optuna.storages.RDBStorage(url=storage_url)
-        study = optuna.load_study(study_name=study_name, storage=storage)
+        # Create study connection with retry logic for database locks
+        max_retries = 5
+        for attempt in range(max_retries):
+            try:
+                storage = optuna.storages.RDBStorage(url=storage_url)
+                study = optuna.load_study(study_name=study_name, storage=storage)
+                break
+            except Exception as e:
+                if attempt < max_retries - 1:
+                    if debug:
+                        print(f"[DEBUG] Worker {worker_id} database connection attempt {attempt + 1} failed: {e}")
+                    time.sleep(0.5 * (attempt + 1))  # Exponential backoff
+                else:
+                    if debug:
+                        print(f"[ERROR] Worker {worker_id} failed to connect to database after {max_retries} attempts")
+                    raise
         
         # Create objective function for this worker
         objective = objective_factory(base_config, search_space, output_dir, debug, shutdown_event)
@@ -91,16 +188,32 @@ def _worker_process(worker_id: int, study_name: str, storage_url: str, n_trials_
         if debug:
             print(f"[DEBUG] Worker {worker_id} starting with {n_trials_per_worker} trials")
         
-        # Run optimization in this worker
-        study.optimize(objective, n_trials=n_trials_per_worker, show_progress_bar=False)
+        # Run optimization in this worker with callback to check shutdown
+        def should_stop_callback(study, trial):
+            return shutdown_event and shutdown_event.is_set()
+        
+        study.optimize(
+            objective, 
+            n_trials=n_trials_per_worker, 
+            show_progress_bar=False,
+            callbacks=[lambda study, trial: should_stop_callback(study, trial)]
+        )
         
         if debug:
             print(f"[DEBUG] Worker {worker_id} completed")
             
+    except KeyboardInterrupt:
+        if debug:
+            print(f"[DEBUG] Worker {worker_id} interrupted by signal")
+        sys.exit(130)
     except Exception as e:
         if debug:
             print(f"[ERROR] Worker {worker_id} failed: {e}")
         raise
+    finally:
+        # Clean up worker database
+        if worker_db_path:
+            _cleanup_worker_database(worker_db_path, debug)
 
 def _suppress_logging_and_output(debug: bool):
     """Suppress logging and output for cleaner optimization runs."""
@@ -122,8 +235,19 @@ def _suppress_logging_and_output(debug: bool):
             trial_logger.addHandler(handler)
         trial_logger.propagate = False
         
-        # Clear root handlers
+        # Clear root handlers to avoid file logging conflicts in multiprocessing
         logging.root.handlers = [logging.NullHandler()]
+        
+        # Remove any file handlers from all loggers to prevent rotation conflicts
+        for name in logging.root.manager.loggerDict:
+            logger = logging.getLogger(name)
+            # Remove file handlers that could cause rotation conflicts
+            handlers_to_remove = []
+            for handler in logger.handlers:
+                if hasattr(handler, 'baseFilename'):  # File-based handlers
+                    handlers_to_remove.append(handler)
+            for handler in handlers_to_remove:
+                logger.removeHandler(handler)
         
         # Suppress stdout but keep stderr for important messages
         sys.stdout = io.StringIO()
@@ -264,6 +388,15 @@ def run_optimization(
     """
     global _worker_processes, _shutdown_event
     
+    # Suppress urllib3 warnings comprehensively before any operations
+    warnings.filterwarnings("ignore", message="urllib3 v2 only supports OpenSSL 1.1.1+")
+    warnings.filterwarnings("ignore", category=UserWarning, module="urllib3")
+    try:
+        import urllib3
+        urllib3.disable_warnings()
+    except ImportError:
+        pass
+    
     # Set up appropriate signal handling based on n_jobs
     if n_jobs > 1:
         if debug:
@@ -296,16 +429,31 @@ def run_optimization(
             storage_url = f"sqlite:///{storage_file}"
             storage = optuna.storages.RDBStorage(url=storage_url)
             
-            # Create study
-            try:
-                study = optuna.create_study(
-                    study_name=study_name, 
-                    storage=storage, 
-                    direction="maximize", 
-                    load_if_exists=True
-                )
-            except optuna.exceptions.DuplicatedStudyError:
-                study = optuna.load_study(study_name=study_name, storage=storage)
+            # Create study with retry logic for database locks
+            max_retries = 5
+            study = None
+            for attempt in range(max_retries):
+                try:
+                    study = optuna.create_study(
+                        study_name=study_name, 
+                        storage=storage, 
+                        direction="maximize", 
+                        load_if_exists=True
+                    )
+                    break
+                except optuna.exceptions.DuplicatedStudyError:
+                    study = optuna.load_study(study_name=study_name, storage=storage)
+                    break
+                except Exception as e:
+                    if attempt < max_retries - 1:
+                        if debug:
+                            print(f"[DEBUG] Study creation attempt {attempt + 1} failed: {e}")
+                        time.sleep(0.5 * (attempt + 1))  # Exponential backoff
+                    else:
+                        raise
+            
+            if study is None:
+                raise RuntimeError("Failed to create or load study after multiple attempts")
             
             if debug:
                 print(f"[DEBUG] Created multiprocessing study with storage: {storage_url}")
@@ -332,7 +480,7 @@ def run_optimization(
                 process.join()
             
             # Check if any worker failed
-            failed_workers = [p for p in _worker_processes if p.exitcode != 0]
+            failed_workers = [p for p in _worker_processes if p.exitcode != 0 and p.exitcode != 130]  # 130 is Ctrl+C
             if failed_workers and debug:
                 print(f"[WARNING] {len(failed_workers)} workers failed")
             
